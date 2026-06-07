@@ -293,13 +293,16 @@ function animate() {
   window._centerGlow.material.opacity = 0.3 + handSpeed * 3;
 
   // ———— 拖尾渲染管线 ————
-  // Step 1: 在 rt 上绘制暗化四边形（让上一帧变暗 = 拖尾）
+  // 关键：关闭 autoClear，让 rt 累积而不是每帧被清空
   renderer.setRenderTarget(rt);
+  renderer.autoClear = false;
+  // Step 1: 暗化四边形（黑色半透明 = 上一帧×0.88），产拖尾残影
   renderer.render(window._fadeScene, orthoCam);
-  // Step 2: 叠加当前粒子
+  // Step 2: 叠加当前粒子（AdditiveBlending 让新粒子叠在上面更亮）
   renderer.render(scene, camera);
   // Step 3: 拷贝到屏幕
   renderer.setRenderTarget(null);
+  renderer.autoClear = true;
   renderer.render(window._dispScene, orthoCam);
 }
 

@@ -26,6 +26,18 @@
     display: flex; flex-direction: column; gap: 12px;
   }
   #panel h4 { font-size: 0.8em; letter-spacing: 0.1em; color: #889; text-align: center; margin-bottom: -4px; }
+  #shapeBtns { display: flex; flex-direction: column; gap: 4px; }
+  #shapeBtns button {
+    all: unset; display: flex; align-items: center; gap: 7px;
+    padding: 7px 10px; border-radius: 8px;
+    font-size: 0.78em; color: #aab; cursor: pointer;
+    border: 1px solid transparent; transition: all 0.25s;
+    letter-spacing: 0.04em;
+  }
+  #shapeBtns button:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.15); }
+  #shapeBtns button.active { background: rgba(120,160,255,0.15); border-color: rgba(120,160,255,0.5); color: #fff; }
+  #shapeBtns button .icon { font-size: 1.2em; width: 22px; text-align: center; }
+
   #panel label { font-size: 0.7em; color: #778; letter-spacing: 0.06em; }
   #panel input[type=color] {
     -webkit-appearance: none; width: 100%; height: 28px; border-radius: 6px;
@@ -98,7 +110,15 @@
 
 <!-- 控制面板 -->
 <div id="panel">
-  <h4>🌌 星云</h4>
+  <h4>✦ 粒子形态</h4>
+  <div id="shapeBtns">
+    <button data-shape="nebula"  class="active"><span class="icon">🌌</span>星云</button>
+    <button data-shape="firework"><span class="icon">🎆</span>烟花</button>
+    <button data-shape="saturn"  ><span class="icon">🪐</span>土星</button>
+    <button data-shape="flower"  ><span class="icon">🌸</span>花朵</button>
+    <button data-shape="vortex"  ><span class="icon">🌪</span>旋涡</button>
+    <button data-shape="galaxy"  ><span class="icon">💫</span>银河</button>
+  </div>
   <label>🎨 基础色</label>
   <input type="color" id="colorPicker" value="#60a0ff">
   <label>🔹 粒子密度 <span id="densityVal" style="float:right">1500</span></label>
@@ -379,41 +399,13 @@ function setupThree() {
   }
   geo.setAttribute('position', new THREE.BufferAttribute(posCur, 3));
   geo.setAttribute('color',    new THREE.BufferAttribute(colArr, 3));
-  geo.setAttribute('size',     new THREE.BufferAttribute(sizeArr, 1));
-  geo.setAttribute('age',      new THREE.BufferAttribute(ageArr, 1));
   geo.setDrawRange(0, particleCount);
   updateAllColors(0);
 
-  const particleMat = new THREE.ShaderMaterial({
-    uniforms: { uTex: { value: mainTex } },
-    vertexShader: `
-      attribute float size;
-      attribute float age;
-      varying vec3 vCol;
-      varying float vAge;
-      void main() {
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = size * age * (320.0 / -mv.z);
-        gl_Position = projectionMatrix * mv;
-        vCol = color;
-        vAge = age;
-      }
-    `,
-    fragmentShader: `
-      varying vec3 vCol;
-      varying float vAge;
-      uniform sampler2D uTex;
-      void main() {
-        vec4 t = texture(uTex, gl_PointCoord);
-        float glow = t.r * 0.5 + t.a;
-        float alpha = glow * (0.25 + 0.75 * vAge);
-        vec3 col = vCol * (1.3 + t.r * 0.6);
-        if (alpha < 0.01) discard;
-        gl_FragColor = vec4(col, alpha);
-      }
-    `,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false, depthTest: true, transparent: true,
+  const particleMat = new THREE.PointsMaterial({
+    size: 0.30, map: mainTex, blending: THREE.AdditiveBlending,
+    depthWrite: false, transparent: true, vertexColors: true,
+    sizeAttenuation: true, opacity: 0.9,
   });
   mainParticles = new THREE.Points(geo, particleMat);
   scene.add(mainParticles);
@@ -486,7 +478,6 @@ function animate() {
     }
   }
   geo.attributes.position.needsUpdate = true;
-  geo.attributes.age.needsUpdate = true;
 
   // 根据旋转角更新色相
   updateAllColors(currentRotY);
@@ -603,6 +594,18 @@ function detectFrame() {
 }
 
 // ===================== UI 事件 =====================
+
+// 形状按钮
+const shapeBtns = document.querySelectorAll('#shapeBtns button');
+shapeBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const shape = btn.dataset.shape;
+    if (currentShape === shape) return;
+    currentShape = shape;
+    fillTargets(shape, particleCount, posTgt);
+    shapeBtns.forEach(b => b.classList.toggle('active', b.dataset.shape === shape));
+  });
+});
 
 // 颜色选择器
 colorPicker.addEventListener('input', () => {

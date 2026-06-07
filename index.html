@@ -203,7 +203,7 @@ const loadEl = document.getElementById('load');
 // ===================== 粒子纹理 =====================
 // ===================== 粒子纹理（多层渐变增强质感）=====================
 function makeGlowTexture(r, g, b) {
-  const sz = 128, c = document.createElement('canvas');
+  const sz = 256, c = document.createElement('canvas');
   c.width = sz; c.height = sz;
   const ctx = c.getContext('2d');
   const grad = ctx.createRadialGradient(sz/2, sz/2, 0, sz/2, sz/2, sz/2);
@@ -372,30 +372,63 @@ function setupThree() {
   // —— 主体粒子 ——
   const mainTex = makeGlowTexture(255, 255, 255);
   geo = new THREE.BufferGeometry();
-  posCur = new Float32Array(MAX_P * 3);
-  posTgt = new Float32Array(MAX_P * 3);
-  colArr = new Float32Array(MAX_P * 3);
+  posCur  = new Float32Array(MAX_P * 3);
+  posTgt  = new Float32Array(MAX_P * 3);
+  colArr  = new Float32Array(MAX_P * 3);
+  sizeArr = new Float32Array(MAX_P);
 
   // 初始化目标
   fillTargets(currentShape, particleCount, posTgt);
-  // 当前位置初始化为散开状态
+  // 当前位置 + 每粒子大小
   for (let i = 0; i < MAX_P; i++) {
     const i3 = i * 3;
     posCur[i3]   = (Math.random() - 0.5) * 10;
     posCur[i3+1] = (Math.random() - 0.5) * 8;
     posCur[i3+2] = (Math.random() - 0.5) * 10;
+    sizeArr[i]   = 0.5 + Math.random() * 1.5; // 大小随机变化，更自然
   }
-  // 初始颜色（必须在 setAttribute 之后）
   geo.setAttribute('position', new THREE.BufferAttribute(posCur, 3));
   geo.setAttribute('color',    new THREE.BufferAttribute(colArr, 3));
+  geo.setAttribute('size',     new THREE.BufferAttribute(sizeArr, 1));
   geo.setDrawRange(0, particleCount);
   updateAllColors(0);
 
-  mainParticles = new THREE.Points(geo, new THREE.PointsMaterial({
-    size: 0.22, map: mainTex, blending: THREE.AdditiveBlending,
-    depthWrite: false, transparent: true, vertexColors: true,
-    sizeAttenuation: true, opacity: 0.9,
-  }));
+  // 自定义 ShaderMaterial：每粒子大小 + 柔和光晕
+  const particleMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTexture: { value: mainTex },
+    },
+    vertexShader: /* glsl */ `
+      attribute float size;
+      varying vec3 vColor;
+      varying float vDepth;
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = size * (320.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+        vColor = color;
+        vDepth = -mv.z;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying vec3 vColor;
+      varying float vDepth;
+      uniform sampler2D uTexture;
+      void main() {
+        vec4 tex = texture2D(uTexture, gl_PointCoord);
+        float a = pow(tex.a, 0.65);
+        float depthFade = clamp(vDepth / 15.0, 0.0, 1.0);
+        vec3 col = vColor * (1.2 + tex.r * 0.4) * (1.0 - depthFade * 0.5);
+        gl_FragColor = vec4(col, a * 0.92);
+      }
+    `,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: true,
+    transparent: true,
+  });
+
+  mainParticles = new THREE.Points(geo, particleMat);
   scene.add(mainParticles);
 }
 
@@ -420,7 +453,7 @@ function updateAllColors(rotY) {
     // 每粒子有微小色相偏移（±25°）
     const offset = (Math.sin(i * 0.7) * 20 + Math.cos(i * 1.3) * 10);
     const h = baseH + hueShift + offset;
-    const [r, g, b] = hslToRgb(h, 70, 60);
+    const [r, g, b] = hslToRgb(h, 85, 68);
     colArr[i3] = r; colArr[i3+1] = g; colArr[i3+2] = b;
   }
   geo.attributes.color.needsUpdate = true;

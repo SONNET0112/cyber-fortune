@@ -6,592 +6,390 @@
 <title>⚡ 神经粒子交互矩阵 Neural Particle Matrix</title>
 <style>
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body {
-    width: 100%; height: 100%;
-    overflow: hidden;
-    background: #000000;
-    cursor: none;
-  }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; cursor: none; }
   #cameraPreview {
-    position: fixed;
-    bottom: 24px; right: 24px;
-    width: 180px; height: 135px;
-    border-radius: 16px;
-    border: 2px solid rgba(0, 240, 255, 0.25);
-    object-fit: cover;
-    transform: scaleX(-1);
-    z-index: 10;
-    opacity: 0.65;
-    background: #000;
-    box-shadow: 0 0 20px rgba(0, 240, 255, 0.1);
+    position: fixed; bottom: 24px; right: 24px;
+    width: 180px; height: 135px; border-radius: 16px;
+    border: 1px solid rgba(0,240,255,0.2);
+    object-fit: cover; transform: scaleX(-1); z-index: 10;
+    opacity: 0.6; background: #000;
   }
-  .cam-label {
-    position: fixed;
-    bottom: 164px; right: 28px;
-    z-index: 11;
-    color: rgba(0, 240, 255, 0.35);
-    font-size: 0.6em;
-    letter-spacing: 0.15em;
-    font-weight: 700;
-    pointer-events: none;
-  }
-  #loadingOverlay {
-    position: fixed;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 20;
-    color: rgba(0, 240, 255, 0.6);
-    font-size: 0.9em;
-    letter-spacing: 0.15em;
-    text-align: center;
-    pointer-events: none;
-    transition: opacity 0.5s;
+  #loading {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    z-index: 20; color: rgba(0,240,255,0.55); font-size: 0.85em;
+    letter-spacing: 0.2em; pointer-events: none; transition: opacity 0.5s;
   }
 </style>
 </head>
 <body>
 
 <video id="cameraPreview" autoplay playsinline></video>
-<div class="cam-label">LIVE</div>
-<div id="loadingOverlay">◈ 神 经 链 接 中 …</div>
+<div id="loading">◈ 神 经 链 接</div>
 
 <script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
-  }
-}
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
 
 <script type="module">
 // ================================================================
 //  ⚡ 神经粒子交互矩阵 — Neural Particle Matrix
-//  赛博朋克 × 电磁物理 × 手势操控
-//  张手→指尖斥力爆散 / 握拳→掌心引力坍缩
-//  高速挥动→数据流撕裂 × 纯白过载
+//  拖尾残影 · 指尖斥力 · 掌心引力 · 深度场 · Glitch撕裂
 // ================================================================
-
 import * as THREE from 'three';
 import { HandLandmarker, FilesetResolver } from
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/+esm";
 
-// ========================== 常量 ============================
-const PARTICLE_COUNT = 1200;
-const REPEL_FORCE = 0.18;           // 指尖斥力强度
-const ATTRACT_FORCE = 0.06;         // 掌心引力强度
-const DAMPING = 0.94;               // 速度阻尼（越小越快停下）
-const TRAIL_FADE = 0.08;            // 拖尾残影淡出速度
-const GLITCH_THRESHOLD = 0.08;      // 触发 Glitch 的手速阈值
-const Z_RANGE = 5;                  // Z 轴深度范围
+// ===================== 常量 =====================
+const N = 1200;                     // 粒子数
+const REPEL = 0.22;                 // 指尖斥力
+const ATTRACT = 0.07;              // 掌心引力
+const DAMPING = 0.935;             // 速度阻尼
+const TRAIL_OPACITY = 0.12;        // 拖尾暗化量（越大拖尾越短）
+const GLITCH_THRESH = 0.06;        // Glitch 触发手速
+const Z_SPREAD = 4;                // Z 轴范围
 
-// ========================== 全局变量 ============================
-let scene, camera, renderer, orthoCamera;
-let rtA, rtB;                        // Ping-pong 渲染目标（拖尾用）
-let feedbackQuad, displayQuad;       // 反馈/显示全屏四边形
+// ===================== 全局变量 =====================
+let scene, camera, renderer, orthoCam;
+let rt, fadeQuad, displayQuad;
 let particleSystem;
-let currentPositions;
-let velocities;                      // Float32Array, 每粒子速度
-let targetPositions;                 // 目标位置参考
+let geo, posArr, velArr, colArr, sizeArr;
 let W, H, time = 0;
+let video, handLandmarker, loaded = false, lastVidTime = -1;
+let gesture = 'none', gestureStable = 0;
+let fingertips = [];               // 指尖 3D 坐标
+let palm = { x: 0, y: 0, z: 0 };
+let prevPx = 0.5, prevPy = 0.5;
+let handSpeed = 0;
+let ringMesh;
 
-// MediaPipe
-let video, handLandmarker, isModelLoaded = false, lastVideoTime = -1;
-let handX = 0.5, handY = 0.5;
-let fingertips = [];                 // 指尖 3D 坐标 [{x,y,z}]
-let palmCenter = {x: 0, y: 0, z: 0};
-let prevPalmX = 0.5, prevPalmY = 0.5;
-let handSpeed = 0;                  // 手部移动速度
-let prevGesture = 'none';
-let gestureStable = 0;
-
-// ========================== Shader ==============================
-
-/** 拖尾反馈片段着色器：将上一帧画面变暗后叠加 */
-const feedbackFrag = /* glsl */ `
-  uniform sampler2D tDiffuse;
-  uniform float uFade;
-  varying vec2 vUv;
-  void main() {
-    vec4 col = texture2D(tDiffuse, vUv);
-    gl_FragColor = vec4(col.rgb * (1.0 - uFade), 1.0);
-  }
-`;
-
-const feedbackVert = /* glsl */ `
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-
-/** 单纯纹理复制着色器 */
-const copyFrag = /* glsl */ `
-  uniform sampler2D tDiffuse;
-  varying vec2 vUv;
-  void main() {
-    gl_FragColor = texture2D(tDiffuse, vUv);
-  }
-`;
-
-// ========================== 粒子纹理 ============================
-
-function createGlowTexture(color1, color2) {
-  const size = 128;
-  const c = document.createElement('canvas');
-  c.width = size; c.height = size;
+// ===================== 粒子纹理 =====================
+function makeTexture(r1,g1,b1, r2,g2,b2) {
+  const sz = 128, c = document.createElement('canvas');
+  c.width = sz; c.height = sz;
   const ctx = c.getContext('2d');
-  const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+  const g = ctx.createRadialGradient(sz/2, sz/2, 0, sz/2, sz/2, sz/2);
   g.addColorStop(0,    'rgba(255,255,255,1)');
-  g.addColorStop(0.03, color1);
-  g.addColorStop(0.15, color2);
-  g.addColorStop(0.4,  'rgba(0,0,0,0)');
-  g.addColorStop(1,    'rgba(0,0,0,0)');
+  g.addColorStop(0.04, `rgba(${r1},${g1},${b1},0.9)`);
+  g.addColorStop(0.18, `rgba(${r2},${g2},${b2},0.5)`);
+  g.addColorStop(0.5,  'rgba(0,0,0,0)');
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  const tex = new THREE.CanvasTexture(c);
-  tex.needsUpdate = true;
-  return tex;
+  ctx.fillRect(0, 0, sz, sz);
+  const t = new THREE.CanvasTexture(c);
+  t.needsUpdate = true;
+  return t;
 }
 
-// ========================== Three.js 初始化 =====================
-
+// ===================== Three.js 初始化 =====================
 function setupThree() {
   W = window.innerWidth; H = window.innerHeight;
 
-  // 渲染器
-  renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, powerPreference: 'high-performance' });
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
   renderer.setSize(W, H);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
   document.body.appendChild(renderer.domElement);
 
-  // 场景
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x000000);
 
-  // 透视相机
   camera = new THREE.PerspectiveCamera(55, W / H, 0.5, 30);
   camera.position.set(0, 0.2, 7);
   camera.lookAt(0, 0, 0);
 
-  // 正交相机（全屏四边形用）
-  orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
-  // Ping-pong 渲染目标
-  rtA = new THREE.WebGLRenderTarget(W, H, {
-    minFilter: THREE.LinearFilter,
-    magFilter: THREE.LinearFilter,
-    format: THREE.RGBAFormat,
-  });
-  rtB = new THREE.WebGLRenderTarget(W, H, {
-    minFilter: THREE.LinearFilter,
-    magFilter: THREE.LinearFilter,
-    format: THREE.RGBAFormat,
+  // 拖尾渲染目标
+  rt = new THREE.WebGLRenderTarget(W, H, {
+    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat
   });
 
-  // 反馈全屏四边形（淡出上一帧）
-  const feedbackMat = new THREE.ShaderMaterial({
-    uniforms: { tDiffuse: { value: rtB.texture }, uFade: { value: TRAIL_FADE } },
-    vertexShader: feedbackVert,
-    fragmentShader: feedbackFrag,
+  // 暗化四边形（覆盖上一帧以产生拖尾）
+  const fadeMat = new THREE.MeshBasicMaterial({
+    color: 0x000000, transparent: true, opacity: TRAIL_OPACITY,
     depthTest: false, depthWrite: false,
   });
-  feedbackQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), feedbackMat);
+  fadeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fadeMat);
+  const fadeScene = new THREE.Scene();
+  fadeScene.add(fadeQuad);
+  window._fadeScene = fadeScene;
 
-  // 显示全屏四边形
-  const displayMat = new THREE.ShaderMaterial({
-    uniforms: { tDiffuse: { value: rtA.texture } },
-    vertexShader: feedbackVert,
-    fragmentShader: copyFrag,
+  // 显示四边形（将 rt 纹理拷贝到屏幕）
+  const dispMat = new THREE.ShaderMaterial({
+    uniforms: { tDiffuse: { value: rt.texture } },
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position, 1.0); }',
+    fragmentShader: 'varying vec2 vUv; uniform sampler2D tDiffuse; void main() { gl_FragColor = texture2D(tDiffuse, vUv); }',
     depthTest: false, depthWrite: false,
   });
-  displayQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), displayMat);
-
-  // 反馈场景
-  window._fbScene = new THREE.Scene();
-  window._fbScene.add(feedbackQuad);
-  window._displayScene = new THREE.Scene();
-  window._displayScene.add(displayQuad);
+  displayQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), dispMat);
+  const dispScene = new THREE.Scene();
+  dispScene.add(displayQuad);
+  window._dispScene = dispScene;
 
   // —— 粒子系统 ——
-  const texCyan = createGlowTexture('rgba(0,240,255,0.9)', 'rgba(0,160,255,0.4)');
-  const texMagenta = createGlowTexture('rgba(255,0,255,0.9)', 'rgba(200,0,200,0.4)');
+  const texCyan   = makeTexture(0,240,255, 0,160,255);
+  const texMagenta = makeTexture(255,0,255, 200,0,200);
 
-  // 使用两张纹理创建混合粒子（通过两个 Points 叠加）
-  // 为简化，先用单一纹理 + vertexColors
-  const geo = new THREE.BufferGeometry();
-  currentPositions = new Float32Array(PARTICLE_COUNT * 3);
-  velocities = new Float32Array(PARTICLE_COUNT * 3);
-  const colors = new Float32Array(PARTICLE_COUNT * 3);
-  const sizes = new Float32Array(PARTICLE_COUNT);
+  geo = new THREE.BufferGeometry();
+  posArr  = new Float32Array(N * 3);
+  velArr  = new Float32Array(N * 3);
+  colArr  = new Float32Array(N * 3);
+  sizeArr = new Float32Array(N);
 
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
+  for (let i = 0; i < N; i++) {
     const i3 = i * 3;
-    // 初始散布在 3D 空间
-    currentPositions[i3]   = (Math.random() - 0.5) * 10;
-    currentPositions[i3+1] = (Math.random() - 0.5) * 8;
-    currentPositions[i3+2] = (Math.random() - 0.5) * Z_RANGE * 2;
-    velocities[i3] = velocities[i3+1] = velocities[i3+2] = 0;
+    posArr[i3]   = (Math.random() - 0.5) * 8;
+    posArr[i3+1] = (Math.random() - 0.5) * 6;
+    posArr[i3+2] = (Math.random() - 0.5) * Z_SPREAD * 2;
+    velArr[i3] = velArr[i3+1] = velArr[i3+2] = 0;
 
-    // 颜色：青/洋红随机混合
-    const isCyan = Math.random() > 0.5;
-    colors[i3]   = isCyan ? 0.1 : 1.0;
-    colors[i3+1] = 0.15;
-    colors[i3+2] = isCyan ? 1.0 : 0.6;
-
-    sizes[i] = 0.5 + Math.random() * 1.5;
+    const cyan = Math.random() > 0.5;
+    colArr[i3]   = cyan ? 0.0 : 1.0;
+    colArr[i3+1] = cyan ? 0.9 : 0.1;
+    colArr[i3+2] = cyan ? 1.0 : 0.7;
+    sizeArr[i] = 0.03 + Math.random() * 0.08; // PointsMaterial 的 size 是屏幕空间单位
   }
 
-  geo.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
-  geo.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
-  geo.setAttribute('size',     new THREE.BufferAttribute(sizes, 1));
+  geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  geo.setAttribute('color',    new THREE.BufferAttribute(colArr, 3));
 
-  // 使用自定义 ShaderMaterial 实现深度相关的大小
-  const particleMat = new THREE.ShaderMaterial({
-    uniforms: {
-      uTexture: { value: texCyan },
-      uTime:    { value: 0 },
-    },
-    vertexShader: /* glsl */ `
-      attribute float size;
-      varying vec3 vColor;
-      varying float vDepth;
-      uniform float uTime;
-      void main() {
-        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = size * (250.0 / -mvPosition.z); // 近大远小
-        gl_Position = projectionMatrix * mvPosition;
-        vColor = color;
-        vDepth = -mvPosition.z; // 用于片元着色器
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      varying vec3 vColor;
-      varying float vDepth;
-      uniform sampler2D uTexture;
-      void main() {
-        // 采样光晕纹理
-        vec4 texel = texture2D(uTexture, gl_PointCoord);
-        // 远处粒子偏暗偏蓝，近处粒子偏亮
-        float depthFactor = clamp(vDepth / 12.0, 0.0, 1.0);
-        vec3 col = vColor * mix(1.4, 0.5, depthFactor);
-        float alpha = texel.a * mix(1.0, 0.5, depthFactor);
-        gl_FragColor = vec4(col * texel.rgb, alpha);
-      }
-    `,
+  // 使用 PointsMaterial：Three.js 原生支持 vertexColors + sizeAttenuation
+  const mat = new THREE.PointsMaterial({
+    size: 0.12,
+    map: texCyan,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     depthTest: true,
     transparent: true,
     vertexColors: true,
+    sizeAttenuation: true,  // 近大远小 ← 自动景深
   });
 
-  particleSystem = new THREE.Points(geo, particleMat);
+  particleSystem = new THREE.Points(geo, mat);
   scene.add(particleSystem);
 
-  // —— 微弱环境光环 ——
-  const ringGeo = new THREE.TorusGeometry(2.8, 0.015, 16, 100);
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0x330044, transparent: true, opacity: 0.25 });
-  const ring = new THREE.Mesh(ringGeo, ringMat);
-  ring.rotation.x = Math.PI / 2;
-  scene.add(ring);
-  window._ambientRing = ring;
+  // —— 暗紫色环境光环 ——
+  const ringGeo = new THREE.TorusGeometry(3, 0.01, 16, 120);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0x220033, transparent: true, opacity: 0.3 });
+  ringMesh = new THREE.Mesh(ringGeo, ringMat);
+  ringMesh.rotation.x = Math.PI / 2.2;
+  scene.add(ringMesh);
+
+  // —— 场景中心微光 ——
+  const glowGeo = new THREE.SphereGeometry(0.3, 32, 32);
+  const glowMat = new THREE.MeshBasicMaterial({ color: 0x110022, transparent: true, opacity: 0.5 });
+  const glow = new THREE.Mesh(glowGeo, glowMat);
+  scene.add(glow);
+  window._centerGlow = glow;
 }
 
-// ========================== 物理力计算 ==========================
+// ===================== 物理模拟 =====================
+function updatePhysics() {
+  const dt = 0.016;
+  const pos = posArr, vel = velArr;
 
-/**
- * 更新所有粒子的速度和位置
- * @param {string} gesture - 'open' | 'fist' | 'none'
- */
-function updatePhysics(gesture) {
-  const pos = currentPositions;
-  const vel = velocities;
-  const dt = 0.016; // ~60fps
-
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
+  for (let i = 0; i < N; i++) {
     const i3 = i * 3;
     let fx = 0, fy = 0, fz = 0;
 
     if (gesture === 'open' && fingertips.length > 0) {
-      // —— 指尖斥力：每个指尖推开附近粒子 ——
+      // 指尖斥力：力 ∝ 1/r²
       for (const ft of fingertips) {
         const dx = pos[i3] - ft.x;
         const dy = pos[i3+1] - ft.y;
         const dz = pos[i3+2] - ft.z;
-        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) + 0.01;
-        if (dist < 4.0) {
-          const force = REPEL_FORCE / (dist * dist);
-          fx += (dx / dist) * force;
-          fy += (dy / dist) * force;
-          fz += (dz / dist) * force * 0.4; // Z 轴斥力较弱
+        const d2 = dx*dx + dy*dy + dz*dz + 0.005;
+        const d = Math.sqrt(d2);
+        if (d < 5) {
+          const f = REPEL / d2;
+          fx += (dx / d) * f;
+          fy += (dy / d) * f;
+          fz += (dz / d) * f * 0.3;
         }
       }
     } else if (gesture === 'fist') {
-      // —— 掌心引力：所有粒子向掌心坍缩 ——
-      const dx = palmCenter.x - pos[i3];
-      const dy = palmCenter.y - pos[i3+1];
-      const dz = palmCenter.z - pos[i3+2];
-      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz) + 0.05;
-      fx += dx * ATTRACT_FORCE;
-      fy += dy * ATTRACT_FORCE;
-      fz += dz * ATTRACT_FORCE * 0.6;
+      // 掌心引力
+      const dx = palm.x - pos[i3];
+      const dy = palm.y - pos[i3+1];
+      const dz = palm.z - pos[i3+2];
+      const d = Math.sqrt(dx*dx + dy*dy + dz*dz) + 0.02;
+      fx += dx * ATTRACT;
+      fy += dy * ATTRACT;
+      fz += dz * ATTRACT * 0.5;
+      // 靠近中心时额外阻尼避免穿透
+      if (d < 0.5) {
+        const extraDrag = (0.5 - d) * 0.3;
+        fx -= vel[i3] * extraDrag;
+        fy -= vel[i3+1] * extraDrag;
+        fz -= vel[i3+2] * extraDrag;
+      }
+    } else {
+      // 无手势：微弱向心回归
+      fx += -pos[i3] * 0.003;
+      fy += -pos[i3+1] * 0.003;
+      fz += -pos[i3+2] * 0.001;
     }
 
-    // —— 更新速度 ——
+    // 更新速度
     vel[i3]   += fx * dt;
     vel[i3+1] += fy * dt;
     vel[i3+2] += fz * dt;
+
+    // Glitch：高速时随机抖
+    if (handSpeed > GLITCH_THRESH) {
+      const gi = (handSpeed - GLITCH_THRESH) * 40;
+      vel[i3]   += (Math.random() - 0.5) * gi * 0.015;
+      vel[i3+1] += (Math.random() - 0.5) * gi * 0.015;
+    }
 
     // 阻尼
     vel[i3]   *= DAMPING;
     vel[i3+1] *= DAMPING;
     vel[i3+2] *= DAMPING;
 
-    // —— Glitch：手速快时随机抖动 ——
-    if (handSpeed > GLITCH_THRESHOLD) {
-      const glitchIntensity = (handSpeed - GLITCH_THRESHOLD) * 30;
-      vel[i3]   += (Math.random() - 0.5) * glitchIntensity * 0.01;
-      vel[i3+1] += (Math.random() - 0.5) * glitchIntensity * 0.01;
-    }
-
-    // —— 更新位置 ——
+    // 更新位置
     pos[i3]   += vel[i3]   * dt;
     pos[i3+1] += vel[i3+1] * dt;
     pos[i3+2] += vel[i3+2] * dt;
 
-    // Z 轴限制
-    pos[i3+2] = Math.max(-Z_RANGE, Math.min(Z_RANGE, pos[i3+2]));
+    // Z 轴居中拉力
+    pos[i3+2] += -pos[i3+2] * 0.003;
 
-    // 软边界：超出一定范围后加回弹力
-    const bound = 6;
+    // 软边界
+    const b = 6;
     for (let j = 0; j < 3; j++) {
-      const axis = pos[i3 + j];
-      if (axis > bound)  vel[i3 + j] -= 0.02 * (axis - bound);
-      if (axis < -bound) vel[i3 + j] += 0.02 * (-bound - axis);
+      const v = pos[i3 + j];
+      if      (v > b)  { pos[i3+j] = b;  vel[i3+j] *= -0.3; }
+      else if (v < -b) { pos[i3+j] = -b; vel[i3+j] *= -0.3; }
     }
   }
+  geo.attributes.position.needsUpdate = true;
 
-  particleSystem.geometry.attributes.position.needsUpdate = true;
-
-  // —— 根据手速动态调整粒子颜色（高速→偏白） ——
-  const colors = particleSystem.geometry.attributes.color.array;
-  const whiteShift = Math.min(1, handSpeed * 8);
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
+  // 颜色：高速→偏白
+  const shift = Math.min(1, handSpeed * 10);
+  for (let i = 0; i < N; i++) {
     const i3 = i * 3;
-    const speed = Math.sqrt(
-      vel[i3]*vel[i3] + vel[i3+1]*vel[i3+1] + vel[i3+2]*vel[i3+2]
-    );
-    const localShift = Math.min(1, speed * 3);
-    const shift = Math.max(whiteShift, localShift);
-    // 向白色混合
-    const isCyan = colors[i3] < 0.5;
-    colors[i3]   = THREE.MathUtils.lerp(isCyan ? 0.1 : 1.0, 1.0, shift);
-    colors[i3+1] = THREE.MathUtils.lerp(0.15, 1.0, shift);
-    colors[i3+2] = THREE.MathUtils.lerp(isCyan ? 1.0 : 0.6, 1.0, shift);
+    const spd = Math.sqrt(vel[i3]*vel[i3] + vel[i3+1]*vel[i3+1] + vel[i3+2]*vel[i3+2]);
+    const s = Math.max(shift, Math.min(1, spd * 4));
+    const cyan = colArr[i3] < 0.5;
+    colArr[i3]   = THREE.MathUtils.lerp(cyan ? 0.0 : 1.0, 1.0, s);
+    colArr[i3+1] = THREE.MathUtils.lerp(cyan ? 0.9 : 0.1, 1.0, s);
+    colArr[i3+2] = THREE.MathUtils.lerp(cyan ? 1.0 : 0.7, 1.0, s);
   }
-  particleSystem.geometry.attributes.color.needsUpdate = true;
+  geo.attributes.color.needsUpdate = true;
 }
 
-// ========================== 渲染循环 ============================
-
+// ===================== 渲染循环 =====================
 function animate() {
   requestAnimationFrame(animate);
   time++;
 
-  // 手势模式
-  let gesture = 'none';
-  if (prevGesture === 'open') gesture = 'open';
-  else if (prevGesture === 'fist') gesture = 'fist';
+  updatePhysics();
 
-  // 更新物理
-  updatePhysics(gesture);
+  // 拖尾：暗化度随手速调整
+  fadeQuad.material.opacity = TRAIL_OPACITY + handSpeed * 0.35;
 
-  // 更新 Uniforms
-  particleSystem.material.uniforms.uTime.value = time * 0.01;
+  // 环境光环随手速呼吸
+  const p = 1 + handSpeed * 4;
+  ringMesh.scale.setScalar(p);
+  ringMesh.material.opacity = 0.2 + handSpeed * 2;
+  window._centerGlow.material.opacity = 0.3 + handSpeed * 3;
 
-  // 环境光环随速度呼吸
-  if (window._ambientRing) {
-    const pulse = 1 + handSpeed * 3;
-    window._ambientRing.scale.setScalar(pulse);
-    window._ambientRing.material.opacity = 0.2 + handSpeed * 2;
-  }
-
-  // ===== 拖尾渲染管线 =====
-  // Step 1: 在 rtA 上绘制淡出后的上一帧（反馈）
-  const fbMat = feedbackQuad.material;
-  fbMat.uniforms.tDiffuse.value = rtB.texture;
-  fbMat.uniforms.uFade.value = TRAIL_FADE + handSpeed * 0.3; // 高速时拖尾更长
-  renderer.setRenderTarget(rtA);
-  renderer.render(window._fbScene, orthoCamera);
-
-  // Step 2: 叠加当前粒子（累加到 rtA）
+  // ———— 拖尾渲染管线 ————
+  // Step 1: 在 rt 上绘制暗化四边形（让上一帧变暗 = 拖尾）
+  renderer.setRenderTarget(rt);
+  renderer.render(window._fadeScene, orthoCam);
+  // Step 2: 叠加当前粒子
   renderer.render(scene, camera);
-
-  // Step 3: 显示到屏幕
+  // Step 3: 拷贝到屏幕
   renderer.setRenderTarget(null);
-  displayQuad.material.uniforms.tDiffuse.value = rtA.texture;
-  renderer.render(window._displayScene, orthoCamera);
-
-  // 交换 ping-pong
-  [rtA, rtB] = [rtB, rtA];
-  feedbackQuad.material.uniforms.tDiffuse.value = rtB.texture;
-  displayQuad.material.uniforms.tDiffuse.value = rtA.texture;
+  renderer.render(window._dispScene, orthoCam);
 }
 
-// ========================== 手势识别 ============================
-
-function isFingerExtended(tipIdx, mcpIdx, lm, wrist) {
-  const tipDist = Math.hypot(lm[tipIdx].x - wrist.x, lm[tipIdx].y - wrist.y);
-  const mcpDist = Math.hypot(lm[mcpIdx].x - wrist.x, lm[mcpIdx].y - wrist.y);
-  return tipDist > mcpDist * 1.12;
+// ===================== 手势识别 =====================
+function isExt(tip, mcp, lm, w) {
+  const td = Math.hypot(lm[tip].x-w.x, lm[tip].y-w.y);
+  const md = Math.hypot(lm[mcp].x-w.x, lm[mcp].y-w.y);
+  return td > md * 1.12;
 }
-
-function detectGesture(lm) {
-  const wrist = lm[0];
-  const fingers = [
-    { tip: 8,  mcp: 5 }, { tip: 12, mcp: 9 },
-    { tip: 16, mcp: 13 }, { tip: 20, mcp: 17 },
-  ];
-  let ext = 0;
-  for (const f of fingers) {
-    if (isFingerExtended(f.tip, f.mcp, lm, wrist)) ext++;
-  }
-  if (ext >= 3) return 'open';
-  if (ext <= 1) return 'fist';
+function detectG(lm) {
+  const w = lm[0];
+  const ff = [[8,5],[12,9],[16,13],[20,17]];
+  let e = 0; for (const [t,m] of ff) if (isExt(t,m,lm,w)) e++;
+  if (e >= 3) return 'open';
+  if (e <= 1) return 'fist';
   return 'none';
 }
-
-/**
- * 将 MediaPipe 归一化坐标转成 3D 场景坐标
- * MediaPipe: x 左→右[0..1], y 上→下[0..1], z 近→远(相对)
- */
-function toSceneCoord(lm) {
-  return {
-    x:  (lm.x - 0.5) * 12,
-    y: -(lm.y - 0.5) * 8,
-    z:  (lm.z || 0) * 4 - 1,
-  };
+function to3D(lm) {
+  return { x: (lm.x-0.5)*10, y: -(lm.y-0.5)*7, z: (lm.z||0)*4-1 };
 }
 
-// ========================== 摄像头 & MediaPipe ==================
-
-async function setupCamera() {
+// ===================== 摄像头 & MediaPipe =====================
+async function setupCam() {
   video = document.getElementById('cameraPreview');
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { width: 640, height: 480, facingMode: 'user' },
-    audio: false,
+  const s = await navigator.mediaDevices.getUserMedia({
+    video: { width: 640, height: 480, facingMode: 'user' }, audio: false
   });
-  video.srcObject = stream;
+  video.srcObject = s;
   await new Promise(r => { video.onloadedmetadata = r; });
   video.play();
 }
-
-async function setupMediaPipe() {
-  const vision = await FilesetResolver.forVisionTasks(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm"
-  );
-  handLandmarker = await HandLandmarker.createFromOptions(vision, {
+async function setupMP() {
+  const v = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm");
+  handLandmarker = await HandLandmarker.createFromOptions(v, {
     baseOptions: {
-      modelAssetPath:
-        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
       delegate: "GPU",
     },
-    runningMode: "VIDEO",
-    numHands: 1,
+    runningMode: "VIDEO", numHands: 1,
   });
-  isModelLoaded = true;
-  document.getElementById('loadingOverlay').style.opacity = '0';
+  loaded = true;
+  document.getElementById('loading').style.opacity = '0';
 }
 
-// ========================== 手势检测循环 =======================
-
 function detectFrame() {
-  if (!isModelLoaded || !video || video.readyState < 2) {
-    requestAnimationFrame(detectFrame);
-    return;
-  }
+  if (!loaded || !video || video.readyState < 2) { requestAnimationFrame(detectFrame); return; }
+  if (video.currentTime !== lastVidTime) {
+    lastVidTime = video.currentTime;
+    const res = handLandmarker.detectForVideo(video, performance.now());
+    if (res.landmarks && res.landmarks.length > 0) {
+      const lm = res.landmarks[0];
+      const g = detectG(lm);
+      if (g === 'open' || g === 'fist') { gestureStable++; if (gestureStable >= 3) { gesture = g; gestureStable = 3; } }
+      else { gestureStable = Math.max(0, gestureStable-1); }
 
-  if (video.currentTime !== lastVideoTime) {
-    lastVideoTime = video.currentTime;
-    const results = handLandmarker.detectForVideo(video, performance.now());
+      fingertips = [4,8,12,16,20].map(i => to3D(lm[i]));
+      palm = to3D(lm[9]);
+      handSpeed = Math.hypot(lm[9].x-prevPx, lm[9].y-prevPy);
+      prevPx = lm[9].x; prevPy = lm[9].y;
 
-    if (results.landmarks && results.landmarks.length > 0) {
-      const lm = results.landmarks[0];
-      const gesture = detectGesture(lm);
-
-      // 防抖
-      if (gesture === 'open' || gesture === 'fist') {
-        gestureStable++;
-        if (gestureStable >= 3) {
-          prevGesture = gesture;
-          gestureStable = 3;
-        }
-      } else {
-        gestureStable = Math.max(0, gestureStable - 1);
-      }
-
-      // —— 更新指尖位置（斥力源） ——
-      // 指尖关键点索引: 4(拇指), 8(食指), 12(中指), 16(无名指), 20(小指)
-      const tipIndices = [4, 8, 12, 16, 20];
-      fingertips = tipIndices.map(i => toSceneCoord(lm[i]));
-
-      // —— 更新掌心位置（引力源，用中指 MCP 近似） ——
-      palmCenter = toSceneCoord(lm[9]);
-
-      // —— 手部速度 ——
-      const px = lm[9].x, py = lm[9].y;
-      handSpeed = Math.hypot(px - prevPalmX, py - prevPalmY);
-      prevPalmX = px; prevPalmY = py;
-
-      // —— 相机微调（手左右移动时轻微旋转视角） ——
-      const camTargetYaw = (lm[9].x - 0.5) * 0.6;
-      camera.position.x += (Math.sin(camTargetYaw) * 7 - camera.position.x) * 0.03;
+      camera.position.x += (Math.sin((lm[9].x-0.5)*0.6) * 7 - camera.position.x) * 0.03;
       camera.lookAt(0, 0, 0);
-
     } else {
-      // 无手时回到默认
-      gestureStable = Math.max(0, gestureStable - 1);
-      if (gestureStable === 0) prevGesture = 'none';
+      gestureStable = Math.max(0, gestureStable-1);
+      if (gestureStable === 0) gesture = 'none';
       fingertips = [];
-      handSpeed *= 0.9; // 手速自然衰减
+      handSpeed *= 0.9;
     }
   }
-
   requestAnimationFrame(detectFrame);
 }
 
-// ========================== 响应式 ==============================
-
+// ===================== 响应式 =====================
 function onResize() {
   W = window.innerWidth; H = window.innerHeight;
-  camera.aspect = W / H;
-  camera.updateProjectionMatrix();
-  renderer.setSize(W, H);
-  rtA.setSize(W, H);
-  rtB.setSize(W, H);
+  camera.aspect = W / H; camera.updateProjectionMatrix();
+  renderer.setSize(W, H); rt.setSize(W, H);
 }
 
-// ========================== 启动 ================================
-
+// ===================== 启动 =====================
 async function main() {
   setupThree();
   animate();
   window.addEventListener('resize', onResize);
-
-  try { await setupCamera(); } catch (e) {
-    console.warn('摄像头不可用：', e.message);
-    document.getElementById('loadingOverlay').textContent = '⚠ 需要摄像头权限';
-  }
-  try { await setupMediaPipe(); detectFrame(); } catch (e) {
-    console.error('MediaPipe 加载失败：', e);
-    document.getElementById('loadingOverlay').textContent = '❌ 模型加载失败';
-  }
+  try { await setupCam(); } catch(e) { document.getElementById('loading').textContent = '⚠ 需要摄像头'; }
+  try { await setupMP(); detectFrame(); } catch(e) { document.getElementById('loading').textContent = '❌ 模型加载失败'; }
 }
-
 main();
 </script>
-
 </body>
 </html>

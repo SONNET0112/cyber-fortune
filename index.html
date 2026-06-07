@@ -379,12 +379,11 @@ function setupThree() {
     posCur[i3+1] = (Math.random() - 0.5) * 8;
     posCur[i3+2] = (Math.random() - 0.5) * 10;
   }
-  // 初始颜色
-  updateAllColors(0);
-
+  // 初始颜色（必须在 setAttribute 之后）
   geo.setAttribute('position', new THREE.BufferAttribute(posCur, 3));
   geo.setAttribute('color',    new THREE.BufferAttribute(colArr, 3));
   geo.setDrawRange(0, particleCount);
+  updateAllColors(0);
 
   mainParticles = new THREE.Points(geo, new THREE.PointsMaterial({
     size: 0.16, map: mainTex, blending: THREE.AdditiveBlending,

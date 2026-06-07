@@ -116,7 +116,7 @@ function setupThree() {
   const dispMat = new THREE.ShaderMaterial({
     uniforms: { tDiffuse: { value: rt.texture } },
     vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position, 1.0); }',
-    fragmentShader: 'varying vec2 vUv; uniform sampler2D tDiffuse; void main() { gl_FragColor = texture2D(tDiffuse, vUv); }',
+    fragmentShader: 'varying vec2 vUv; uniform sampler2D tDiffuse; void main() { gl_FragColor = texture(tDiffuse, vUv); }',
     depthTest: false, depthWrite: false,
   });
   displayQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), dispMat);
@@ -124,9 +124,8 @@ function setupThree() {
   dispScene.add(displayQuad);
   window._dispScene = dispScene;
 
-  // —— 粒子系统 ——
-  const texCyan   = makeTexture(0,240,255, 0,160,255);
-  const texMagenta = makeTexture(255,0,255, 200,0,200);
+  // —— 粒子系统（中性白色光晕纹理，颜色由 vertexColors 控制） ——
+  const texGlow = makeTexture(255,255,255, 180,200,255);
 
   geo = new THREE.BufferGeometry();
   posArr  = new Float32Array(N * 3);
@@ -153,8 +152,8 @@ function setupThree() {
 
   // 使用 PointsMaterial：Three.js 原生支持 vertexColors + sizeAttenuation
   const mat = new THREE.PointsMaterial({
-    size: 0.12,
-    map: texCyan,
+    size: 0.25,
+    map: texGlow,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     depthTest: true,

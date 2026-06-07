@@ -583,10 +583,39 @@ window.addEventListener('resize', () => {
 
 // ===================== 启动 =====================
 async function main() {
-  setupThree();
-  animate();
-  try { await setupCam(); } catch(e) { loadEl.textContent = '⚠ 需要摄像头权限'; }
-  try { await setupMP(); detectFrame(); } catch(e) { loadEl.textContent = '❌ 模型加载失败'; }
+  window.onerror = (msg, src, line) => {
+    loadEl.textContent = '❌ JS错误 L' + line + ': ' + String(msg).slice(0,60);
+    loadEl.style.color = '#f66';
+    console.error(msg, src, line);
+  };
+
+  try {
+    setupThree();
+    loadEl.textContent = '';  // Three.js 加载成功，隐藏加载提示
+    loadEl.style.opacity = '0';
+    animate();
+  } catch(e) {
+    loadEl.textContent = '❌ Three.js: ' + e.message;
+    loadEl.style.color = '#f66';
+    console.error(e);
+    return;
+  }
+
+  try { await setupCam(); } catch(e) {
+    console.warn('摄像头:', e.message);
+    loadEl.textContent = '⚠ 无摄像头，仅显示粒子';
+    loadEl.style.opacity = '1';
+    loadEl.style.color = '#fa0';
+    setTimeout(() => { loadEl.style.opacity = '0'; }, 3000);
+  }
+
+  try { await setupMP(); detectFrame(); } catch(e) {
+    console.warn('MediaPipe:', e.message);
+    loadEl.textContent = '⚠ 手势模型未加载，用鼠标试试';
+    loadEl.style.opacity = '1';
+    loadEl.style.color = '#fa0';
+    setTimeout(() => { loadEl.style.opacity = '0'; }, 3000);
+  }
 }
 main();
 </script>

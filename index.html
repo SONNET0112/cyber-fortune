@@ -169,6 +169,7 @@ let baseColor = new THREE.Color('#60a0ff');
 let targetScale = 1.2, currentScale = 1.2;
 let targetRotY = 0, targetRotX = 0;
 let currentRotY = 0, currentRotX = 0;
+let targetShiftY = 0; // 手上下 → 粒子垂直位移
 
 // 手势
 let video, handLandmarker, loaded = false, lastVidTime = -1;
@@ -188,15 +189,18 @@ const fsBtn = document.getElementById('fsBtn');
 const loadEl = document.getElementById('load');
 
 // ===================== 粒子纹理 =====================
+// ===================== 粒子纹理（多层渐变增强质感）=====================
 function makeGlowTexture(r, g, b) {
   const sz = 128, c = document.createElement('canvas');
   c.width = sz; c.height = sz;
   const ctx = c.getContext('2d');
   const grad = ctx.createRadialGradient(sz/2, sz/2, 0, sz/2, sz/2, sz/2);
   grad.addColorStop(0,    'rgba(255,255,255,1)');
-  grad.addColorStop(0.03, `rgba(${r},${g},${b},0.95)`);
-  grad.addColorStop(0.12, `rgba(${r},${g},${b},0.5)`);
-  grad.addColorStop(0.4,  'rgba(0,0,0,0)');
+  grad.addColorStop(0.02, 'rgba(255,255,255,0.95)');
+  grad.addColorStop(0.06, `rgba(${r},${g},${b},0.8)`);
+  grad.addColorStop(0.15, `rgba(${r},${g},${b},0.35)`);
+  grad.addColorStop(0.35, `rgba(${Math.floor(r*0.4)},${Math.floor(g*0.4)},${Math.floor(b*0.4)},0.08)`);
+  grad.addColorStop(0.7,  'rgba(0,0,0,0)');
   ctx.fillStyle = grad; ctx.fillRect(0, 0, sz, sz);
   const t = new THREE.CanvasTexture(c); t.needsUpdate = true;
   return t;
@@ -376,9 +380,9 @@ function setupThree() {
   updateAllColors(0);
 
   mainParticles = new THREE.Points(geo, new THREE.PointsMaterial({
-    size: 0.16, map: mainTex, blending: THREE.AdditiveBlending,
+    size: 0.22, map: mainTex, blending: THREE.AdditiveBlending,
     depthWrite: false, transparent: true, vertexColors: true,
-    sizeAttenuation: true,
+    sizeAttenuation: true, opacity: 0.9,
   }));
   scene.add(mainParticles);
 }
@@ -425,6 +429,7 @@ function animate() {
     targetRotY += 0.003;
     targetRotX += (0 - targetRotX) * 0.01;
     targetScale += (1.2 - targetScale) * 0.02;
+    targetShiftY += (0 - targetShiftY) * 0.02;
   }
 
   // 更新粒子位置（Lerp）
@@ -439,11 +444,12 @@ function animate() {
   // 根据旋转角更新色相
   updateAllColors(currentRotY);
 
-  // 应用缩放到主粒子
+  // 应用缩放 + 旋转 + 垂直位移
   mainParticles.scale.setScalar(currentScale);
-  // 应用旋转
   mainParticles.rotation.y = currentRotY;
-  mainParticles.rotation.x = currentRotX * 0.5;
+  mainParticles.rotation.x = currentRotX * 0.7;
+  // 手上下 → 粒子整体上下偏移
+  mainParticles.position.y += (targetShiftY - mainParticles.position.y) * 0.05;
 
   // 背景粒子缓慢自转
   bgParticles.rotation.y += 0.0004;
@@ -537,9 +543,10 @@ function detectFrame() {
 
   // 映射：张手→膨胀(1.8)   握拳→收缩(0.4)
   targetScale = 0.4 + smoothOpenness * 1.4;
-  // 映射：手位置→旋转   X: [-PI, PI]  Y: [-0.6, 0.6]
+  // 映射：手左右→Y旋转 | 手上下→X倾斜 + 垂直位移
   targetRotY = (handX - 0.5) * Math.PI * 2;
-  targetRotX = (handY - 0.5) * 1.2;
+  targetRotX = (handY - 0.5) * 2.0;
+  targetShiftY = (0.5 - handY) * 3.5; // 手举高→粒子上浮，手放低→粒子下沉
 
   hintEl.textContent = handDetected
     ? (smoothOpenness > 0.6 ? '🖐' : smoothOpenness < 0.3 ? '✊' : '')

@@ -492,16 +492,8 @@ function animate() {
   bgParticles.rotation.y += 0.0004;
   bgParticles.rotation.x += 0.0002;
 
-  // ———— 拖尾渲染管线 ————
-  // 暗化度随粒子速度调整（模拟动态拖尾长度）
-  fadeQuad.material.opacity = 0.07;
-  renderer.setRenderTarget(rtTrail);
-  renderer.autoClear = false;
-  renderer.render(window._fadeScene, orthoCam);  // 暗化上一帧
-  renderer.render(scene, camera);                 // 叠加新粒子
-  renderer.setRenderTarget(null);
-  renderer.autoClear = true;
-  renderer.render(window._dispScene, orthoCam);   // 输出到屏幕
+  // 直接渲染（调试）
+  renderer.render(scene, camera);
 }
 
 // ===================== 手势识别 =====================

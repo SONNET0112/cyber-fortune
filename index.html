@@ -385,51 +385,18 @@ function setupThree() {
     posCur[i3]   = (Math.random() - 0.5) * 10;
     posCur[i3+1] = (Math.random() - 0.5) * 8;
     posCur[i3+2] = (Math.random() - 0.5) * 10;
-    sizeArr[i]   = 0.5 + Math.random() * 1.5; // 大小随机变化，更自然
+    sizeArr[i]   = 0.5 + Math.random() * 1.5;
   }
   geo.setAttribute('position', new THREE.BufferAttribute(posCur, 3));
   geo.setAttribute('color',    new THREE.BufferAttribute(colArr, 3));
-  geo.setAttribute('size',     new THREE.BufferAttribute(sizeArr, 1));
   geo.setDrawRange(0, particleCount);
   updateAllColors(0);
 
-  // 自定义 ShaderMaterial：每粒子大小 + 柔和光晕
-  const particleMat = new THREE.ShaderMaterial({
-    uniforms: {
-      uTexture: { value: mainTex },
-    },
-    vertexShader: /* glsl */ `
-      attribute float size;
-      attribute vec3 aColor;
-      varying vec3 vColor;
-      varying float vDepth;
-      void main() {
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = size * (320.0 / -mv.z);
-        gl_Position = projectionMatrix * mv;
-        vColor = aColor;
-        vDepth = -mv.z;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      varying vec3 vColor;
-      varying float vDepth;
-      uniform sampler2D uTexture;
-      void main() {
-        vec4 tex = texture(uTexture, gl_PointCoord);
-        float a = pow(tex.a, 0.65);
-        float depthFade = clamp(vDepth / 15.0, 0.0, 1.0);
-        vec3 col = vColor * (1.2 + tex.r * 0.4) * (1.0 - depthFade * 0.5);
-        gl_FragColor = vec4(col, a * 0.92);
-      }
-    `,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    depthTest: true,
-    transparent: true,
-  });
-
-  mainParticles = new THREE.Points(geo, particleMat);
+  mainParticles = new THREE.Points(geo, new THREE.PointsMaterial({
+    size: 0.28, map: mainTex, blending: THREE.AdditiveBlending,
+    depthWrite: false, transparent: true, vertexColors: true,
+    sizeAttenuation: true, opacity: 0.92,
+  }));
   scene.add(mainParticles);
 }
 

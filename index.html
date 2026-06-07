@@ -61,40 +61,6 @@
     pointer-events: none;
   }
 
-  /* ========== 状态提示文字 ========== */
-  #statusBar {
-    position: fixed;
-    top: 30px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 10;
-    color: #fff;
-    font-size: 1.2em;
-    font-weight: 700;
-    letter-spacing: 0.15em;
-    text-align: center;
-    text-shadow: 0 0 20px rgba(0, 240, 255, 0.8);
-    transition: all 0.5s;
-    pointer-events: none;
-  }
-
-  /* 手势图标放大动画 */
-  .gesture-burst {
-    position: fixed;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 80px;
-    pointer-events: none;
-    z-index: 5;
-    animation: burstPulse 1s ease-out forwards;
-  }
-
-  @keyframes burstPulse {
-    0%   { opacity: 1; transform: translate(-50%, -50%) scale(0.3); }
-    50%  { opacity: 0.6; }
-    100% { opacity: 0; transform: translate(-50%, -50%) scale(2.5); }
-  }
-
   /* ========== 连接状态提示 ========== */
   #loadingOverlay {
     position: fixed;
@@ -118,8 +84,6 @@
 <video id="cameraPreview" autoplay playsinline></video>
 <div class="cam-label">📷 CAM</div>
 
-<!-- 状态提示 -->
-<div id="statusBar">🖐 等待手势…</div>
 <div id="loadingOverlay">⏳ 加载手势识别模型…</div>
 
 <!-- ==================== MediaPipe Hands CDN ==================== -->
@@ -431,16 +395,6 @@ function setAllParticleTargets(mode) {
   }
 }
 
-// ========================== 手势切换爆发动画 ======================
-
-function emitGestureBurst(gesture) {
-  const el = document.createElement('div');
-  el.className = 'gesture-burst';
-  el.textContent = gesture === 'fist' ? '✊' : '🖐';
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 1000);
-}
-
 // ========================== 渲染循环 ============================
 
 function drawConnections() {
@@ -621,25 +575,15 @@ function detectFrame() {
 }
 
 function updateGestureState(gesture) {
-  const statusBar = document.getElementById('statusBar');
-
   if (gesture === 'open' && lastGestureMode !== 'scatter') {
     lastGestureMode = 'scatter';
     setAllParticleTargets('scatter');
-    emitGestureBurst('open');
-    statusBar.innerHTML = '🖐 <span style="color:#39ff14;">张手 · 粒子散开</span>';
-    statusBar.style.textShadow = '0 0 25px rgba(57, 255, 20, 0.9)';
   } else if (gesture === 'fist' && lastGestureMode !== 'gather') {
     lastGestureMode = 'gather';
     setAllParticleTargets('gather');
-    emitGestureBurst('fist');
-    statusBar.innerHTML = '✊ <span style="color:#ffd700;">握拳 · 粒子聚拢</span>';
-    statusBar.style.textShadow = '0 0 25px rgba(255, 215, 0, 0.9)';
   } else if (gesture === 'none' && lastGestureMode !== 'scatter') {
     lastGestureMode = 'scatter';
     setAllParticleTargets('scatter');
-    statusBar.innerHTML = '🖐 等待手势…';
-    statusBar.style.textShadow = '0 0 20px rgba(0, 240, 255, 0.8)';
   }
 }
 

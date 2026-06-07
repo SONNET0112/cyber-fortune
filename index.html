@@ -3,354 +3,393 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>粒子手势控制 — 握拳聚拢 · 张手散开</title>
+<title>🌊 海的思念 · 3D 粒子装置</title>
 <style>
-  /* ========== 全局重置 ========== */
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
   html, body {
     width: 100%; height: 100%;
     overflow: hidden;
-    background: #000;
-    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-    cursor: none; /* 隐藏默认鼠标，用粒子效果代替 */
+    background: #000510;
   }
 
-  /* ========== 粒子画布：铺满全屏 ========== */
-  #particleCanvas {
-    position: fixed;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
-    z-index: 1;
-  }
-
-  /* ========== 摄像头预览小窗 ========== */
+  /* 摄像头预览小窗 */
   #cameraPreview {
     position: fixed;
-    bottom: 24px;
-    right: 24px;
-    width: 180px;
-    height: 135px;
+    bottom: 24px; right: 24px;
+    width: 180px; height: 135px;
     border-radius: 16px;
-    border: 2px solid rgba(0, 240, 255, 0.35);
+    border: 2px solid rgba(100, 160, 255, 0.3);
     object-fit: cover;
-    transform: scaleX(-1); /* 镜像翻转 */
+    transform: scaleX(-1);
     z-index: 10;
-    opacity: 0.75;
-    transition: all 0.4s;
-    background: #0a0a0f;
-    box-shadow: 0 0 20px rgba(0, 240, 255, 0.15), 0 0 60px rgba(179, 71, 234, 0.08);
+    opacity: 0.7;
+    transition: opacity 0.4s;
+    background: #000a1a;
+    box-shadow: 0 0 20px rgba(60, 120, 255, 0.12);
   }
+  #cameraPreview:hover { opacity: 1; }
 
-  #cameraPreview:hover {
-    opacity: 1;
-    border-color: rgba(0, 240, 255, 0.7);
-    box-shadow: 0 0 30px rgba(0, 240, 255, 0.3), 0 0 80px rgba(179, 71, 234, 0.15);
-  }
-
-  /* 摄像头标签 */
   .cam-label {
     position: fixed;
-    bottom: 164px;
-    right: 24px;
+    bottom: 164px; right: 24px;
     z-index: 11;
-    color: rgba(0, 240, 255, 0.5);
-    font-size: 0.7em;
-    letter-spacing: 0.12em;
+    color: rgba(120, 180, 255, 0.45);
+    font-size: 0.65em;
+    letter-spacing: 0.14em;
     font-weight: 600;
     pointer-events: none;
   }
 
-  /* ========== 连接状态提示 ========== */
+  /* 底部氛围文字 */
+  #moodText {
+    position: fixed;
+    bottom: 40px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 5;
+    color: rgba(150, 200, 255, 0.4);
+    font-size: 0.85em;
+    letter-spacing: 0.2em;
+    pointer-events: none;
+    transition: all 1.5s;
+    font-style: italic;
+  }
+
+  /* 加载提示 */
   #loadingOverlay {
     position: fixed;
     top: 50%; left: 50%;
     transform: translate(-50%, -50%);
     z-index: 20;
-    color: #888;
+    color: rgba(150, 190, 240, 0.7);
     font-size: 0.95em;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.12em;
     text-align: center;
-    transition: opacity 0.5s;
+    transition: opacity 0.6s;
+    pointer-events: none;
   }
 </style>
 </head>
 <body>
 
-<!-- 粒子画布 -->
-<canvas id="particleCanvas"></canvas>
+<!-- Three.js 渲染目标 -->
+<div id="threeContainer"></div>
 
-<!-- 摄像头预览 -->
 <video id="cameraPreview" autoplay playsinline></video>
-<div class="cam-label">📷 CAM</div>
+<div class="cam-label">📷</div>
 
-<div id="loadingOverlay">⏳ 加载手势识别模型…</div>
+<div id="moodText">海 的 思 念</div>
+<div id="loadingOverlay">🌊 正在加载…</div>
 
-<!-- ==================== MediaPipe Hands CDN ==================== -->
+<!-- ==================== Import Maps ==================== -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+
 <script type="module">
 // ================================================================
-//  引入 MediaPipe Tasks Vision 库（ESM 模块）
+//  🌊 海的思念 — 3D 粒子交互装置
+//  手势控制：张手散开 / 握拳聚拢
+//  手掌移动旋转视角 / 双手推拉缩放
+//  默认形态：粒子缓缓聚成心形
 // ================================================================
+
+import * as THREE from 'three';
 import { HandLandmarker, FilesetResolver } from
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/+esm";
 
-// ========================== 常量定义 ============================
-const PARTICLE_COUNT = 600;           // 主粒子数（含连线后性能友好）
-const BG_STAR_COUNT = 200;           // 背景星星数
-const CONNECT_MAX_DIST = 130;        // 连线最大距离（像素）
-const CONNECT_MAX_LINES = 8;         // 每个粒子最多连几条线
-const LERP_SPEED = 0.05;             // 插值速度
-const BASE_RING_RADIUS = 100;        // 聚拢圆环基础半径
-const RING_THICKNESS = 90;           // 圆环厚度
-const FLOAT_AMPLITUDE = 20;          // 漂浮振幅
-const MOUSE_REPEL_RADIUS = 150;      // 鼠标排斥半径
-const MOUSE_REPEL_FORCE = 40;        // 鼠标排斥力度
-const SPATIAL_CELL = 140;            // 空间网格单元格大小（略大于连线距离）
+// ========================== 常量 ============================
+const PARTICLE_COUNT = 1800;        // 主粒子数
+const LERP_SPEED = 0.045;           // 位置插值速度
+const ROTATION_LERP = 0.06;         // 旋转平滑速度
+const SCALE_LERP = 0.05;            // 缩放平滑速度
 
-// ========================== 全局变量 ============================
-let canvas, ctx;
-let particles = [];                  // 主粒子
-let bgStars = [];                    // 背景星星
+// ========================== Three.js 全局变量 ===================
+let scene, camera, renderer;
+let particleGroup;                  // 粒子组的父级（用于旋转/缩放）
+let particleSystem;                 // THREE.Points
+let particleTexture;
+let currentPositions, targetPositions; // Float32Array
+let geometry;
+
+// ========================== 粒子数据 ========================
+let particleColors;                 // 每个粒子的颜色（Float32Array）
+let particleBaseSizes;              // 每个粒子的基础大小
+
+// ========================== 状态 ============================
+let lastGestureMode = 'heart';      // 'heart' | 'scatter' | 'gather'
+let gestureStable = 0;
+let targetRotationY = 0;
+let targetScale = 1.0;
+let prevHandX = 0.5;               // 上一帧手 X 坐标
+let twoHandBaseDist = null;         // 双手基线距离
+let time = 0;
+
+// 摄像头/MediaPipe
 let video;
 let handLandmarker;
-let lastVideoTime = -1;
 let isModelLoaded = false;
+let lastVideoTime = -1;
 
-let currentGesture = 'none';
-let gestureStable = 0;
+// ========================== 心形生成器 ========================
 
-let W, H;
-let mouseX = -1000, mouseY = -1000;  // 鼠标位置
-let mouseActive = false;              // 鼠标是否在窗口内
-let time = 0;                         // 全局时间计数器
-
-// 空间哈希表（用于高效连线查找）
-let spatialGrid = new Map();
-
-// 手势模式
-let lastGestureMode = 'scatter';
-
-// ========================== HSL 颜色工具 ============================
-
-/** HSL → RGB 十六进制字符串 */
-function hslToHex(h, s, l) {
-  h = ((h % 360) + 360) % 360;
-  s = Math.max(0, Math.min(100, s)) / 100;
-  l = Math.max(0, Math.min(100, l)) / 100;
-  const a = s * Math.min(l, 1 - l);
-  const f = n => {
-    const k = (n + h / 30) % 12;
-    return l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)));
+/**
+ * 生成心形曲线上的 3D 坐标
+ * 使用参数方程：x = 16sin³(t), y = 13cos(t)-5cos(2t)-2cos(3t)-cos(4t)
+ * 并通过随机缩放填充心形内部
+ */
+function generateHeartTarget(i) {
+  const t = (i / PARTICLE_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
+  // 填充因子：0=中心, 1=轮廓（用 sqrt 让中心更密集）
+  const fill = Math.sqrt(Math.random());
+  const rx = fill * 16 * Math.pow(Math.sin(t), 3);
+  const ry = fill * (13*Math.cos(t) - 5*Math.cos(2*t) - 2*Math.cos(3*t) - Math.cos(4*t));
+  // 缩放到合适大小，并微调 Y 轴让心形居中
+  const scale = 0.13;
+  return {
+    x: rx * scale,
+    y: ry * scale + 0.3,
+    z: (Math.random() - 0.5) * 1.2 * fill
   };
-  const r = Math.round(f(0) * 255);
-  const g = Math.round(f(8) * 255);
-  const b = Math.round(f(4) * 255);
-  return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
 }
 
-// ========================== 空间哈希表 ============================
-
-function getCellKey(x, y) {
-  const cx = Math.floor(x / SPATIAL_CELL);
-  const cy = Math.floor(y / SPATIAL_CELL);
-  return `${cx},${cy}`;
+/** 生成球体目标（握拳聚拢） */
+function generateSphereTarget() {
+  const phi = Math.acos(2 * Math.random() - 1);
+  const theta = Math.random() * Math.PI * 2;
+  const r = 1.2 + (Math.random() - 0.5) * 0.4;
+  return {
+    x: r * Math.sin(phi) * Math.cos(theta),
+    y: r * Math.sin(phi) * Math.sin(theta),
+    z: r * Math.cos(phi)
+  };
 }
 
-function clearSpatialGrid() {
-  spatialGrid.clear();
+/** 生成散开目标（大范围随机球体） */
+function generateScatterTarget() {
+  const phi = Math.acos(2 * Math.random() - 1);
+  const theta = Math.random() * Math.PI * 2;
+  const r = 3.5 + Math.random() * 6;
+  return {
+    x: r * Math.sin(phi) * Math.cos(theta),
+    y: r * Math.sin(phi) * Math.sin(theta),
+    z: r * Math.cos(phi)
+  };
 }
 
-function addToGrid(particle) {
-  const key = getCellKey(particle.x, particle.y);
-  if (!spatialGrid.has(key)) spatialGrid.set(key, []);
-  spatialGrid.get(key).push(particle);
+// ========================== 粒子纹理（发光圆点）=================
+
+function createGlowTexture() {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  // 多层渐变模拟柔光
+  const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+  g.addColorStop(0,    'rgba(255,255,255,1)');
+  g.addColorStop(0.02, 'rgba(220,235,255,0.95)');
+  g.addColorStop(0.08, 'rgba(150,200,255,0.7)');
+  g.addColorStop(0.2,  'rgba(80, 140, 240,0.35)');
+  g.addColorStop(0.5,  'rgba(20, 50,  140,0.05)');
+  g.addColorStop(1,    'rgba(0, 0,   30, 0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  return tex;
 }
 
-/** 查找粒子附近的所有邻居（只检查当前格 + 8 邻格） */
-function getNearby(particle) {
-  const cx = Math.floor(particle.x / SPATIAL_CELL);
-  const cy = Math.floor(particle.y / SPATIAL_CELL);
-  const nearby = [];
-  for (let dx = -1; dx <= 1; dx++) {
-    for (let dy = -1; dy <= 1; dy++) {
-      const key = `${cx + dx},${cy + dy}`;
-      if (spatialGrid.has(key)) {
-        nearby.push(...spatialGrid.get(key));
-      }
+// ========================== Three.js 初始化 ====================
+
+function setupThreeJS() {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+
+  // 渲染器
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+  renderer.setSize(W, H);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  document.body.appendChild(renderer.domElement);
+
+  // 场景：深海夜色
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000a1a);
+  scene.fog = new THREE.FogExp2(0x000a1a, 0.00025);
+
+  // 相机
+  camera = new THREE.PerspectiveCamera(55, W / H, 0.5, 50);
+  camera.position.set(0, 0.6, 7.5);
+  camera.lookAt(0, 0.2, 0);
+
+  // 粒子纹理
+  particleTexture = createGlowTexture();
+
+  // 粒子几何体
+  geometry = new THREE.BufferGeometry();
+  currentPositions = new Float32Array(PARTICLE_COUNT * 3);
+  targetPositions = new Float32Array(PARTICLE_COUNT * 3);
+  particleColors = new Float32Array(PARTICLE_COUNT * 3);
+
+  // 初始化位置和颜色
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const heart = generateHeartTarget(i);
+    const i3 = i * 3;
+    // 初始散布在空间中
+    currentPositions[i3] = (Math.random() - 0.5) * 6;
+    currentPositions[i3+1] = (Math.random() - 0.5) * 6;
+    currentPositions[i3+2] = (Math.random() - 0.5) * 6;
+    targetPositions[i3] = heart.x;
+    targetPositions[i3+1] = heart.y;
+    targetPositions[i3+2] = heart.z;
+
+    // 蓝白色系
+    const blueMix = 0.4 + Math.random() * 0.6;
+    particleColors[i3] = 0.35 * blueMix;       // R
+    particleColors[i3+1] = 0.55 * blueMix;     // G
+    particleColors[i3+2] = 0.6 + 0.4 * blueMix; // B
+  }
+
+  geometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(particleColors, 3));
+
+  // 粒子材质
+  const material = new THREE.PointsMaterial({
+    size: 0.18,
+    map: particleTexture,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: true,
+    transparent: true,
+    opacity: 0.85,
+    vertexColors: true,
+  });
+
+  // 创建粒子系统
+  particleSystem = new THREE.Points(geometry, material);
+
+  // 父级 Group（用于旋转和缩放）
+  particleGroup = new THREE.Group();
+  particleGroup.add(particleSystem);
+  scene.add(particleGroup);
+
+  // —— 环境微光粒子（深度感） ——
+  createAmbientParticles();
+}
+
+/** 创建漂浮的背景光点，增加空间深度 */
+function createAmbientParticles() {
+  const count = 300;
+  const ambientGeo = new THREE.BufferGeometry();
+  const ambientPos = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    ambientPos[i*3] = (Math.random() - 0.5) * 15;
+    ambientPos[i*3+1] = (Math.random() - 0.5) * 10;
+    ambientPos[i*3+2] = -2 - Math.random() * 8;
+  }
+  ambientGeo.setAttribute('position', new THREE.BufferAttribute(ambientPos, 3));
+  const ambientMat = new THREE.PointsMaterial({
+    size: 0.06,
+    map: particleTexture,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    transparent: true,
+    opacity: 0.4,
+    color: new THREE.Color(0x4488cc),
+  });
+  const ambientPts = new THREE.Points(ambientGeo, ambientMat);
+  scene.add(ambientPts);
+
+  // 存储引用用于动画
+  window._ambientParticles = { points: ambientPts, positions: ambientPos };
+}
+
+// ========================== 粒子目标更新 =======================
+
+function setAllTargets(mode) {
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    let target;
+    if (mode === 'heart')   target = generateHeartTarget(i);
+    else if (mode === 'gather') target = generateSphereTarget();
+    else                    target = generateScatterTarget();
+
+    const i3 = i * 3;
+    targetPositions[i3]   = target.x;
+    targetPositions[i3+1] = target.y;
+    targetPositions[i3+2] = target.z;
+  }
+}
+
+// ========================== 动画循环 ============================
+
+function updateParticles() {
+  const posArr = geometry.attributes.position.array;
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const i3 = i * 3;
+    // Lerp 向目标位置过渡
+    posArr[i3]   += (targetPositions[i3]   - posArr[i3])   * LERP_SPEED;
+    posArr[i3+1] += (targetPositions[i3+1] - posArr[i3+1]) * LERP_SPEED;
+    posArr[i3+2] += (targetPositions[i3+2] - posArr[i3+2]) * LERP_SPEED;
+  }
+  geometry.attributes.position.needsUpdate = true;
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  time++;
+
+  // 更新粒子位置
+  updateParticles();
+
+  // 平滑旋转
+  particleGroup.rotation.y += (targetRotationY - particleGroup.rotation.y) * ROTATION_LERP;
+
+  // 平滑缩放
+  const currentScale = particleGroup.scale.x;
+  const newScale = currentScale + (targetScale - currentScale) * SCALE_LERP;
+  particleGroup.scale.setScalar(newScale);
+
+  // 粒子大小随呼吸感微调
+  const breathe = 1 + Math.sin(time * 0.015) * 0.06;
+  particleSystem.material.size = 0.18 * breathe;
+
+  // 环境光点浮动
+  if (window._ambientParticles) {
+    const amb = window._ambientParticles;
+    const ap = amb.positions;
+    for (let i = 0; i < ap.length / 3; i++) {
+      ap[i*3+1] += Math.sin(time * 0.01 + i) * 0.003;
+      ap[i*3]   += Math.cos(time * 0.008 + i) * 0.002;
     }
+    amb.points.geometry.attributes.position.needsUpdate = true;
   }
-  return nearby;
+
+  // 氛围文字随状态变化
+  const moodEl = document.getElementById('moodText');
+  if (lastGestureMode === 'heart') {
+    moodEl.textContent = '海 的 思 念';
+    moodEl.style.color = 'rgba(150,200,255,0.4)';
+  } else if (lastGestureMode === 'scatter') {
+    moodEl.textContent = '散 落 星 河';
+    moodEl.style.color = 'rgba(180,210,255,0.5)';
+  } else {
+    moodEl.textContent = '久 别 重 逢';
+    moodEl.style.color = 'rgba(200,220,255,0.55)';
+  }
+
+  renderer.render(scene, camera);
 }
 
-// ========================== 粒子类 ==============================
-class Particle {
-  constructor(id) {
-    this.id = id;
-    this.x = Math.random() * window.innerWidth;
-    this.y = Math.random() * window.innerHeight;
-    this.targetX = this.x;
-    this.targetY = this.y;
-
-    // —— 极坐标参数 ——
-    this.angle = (id / PARTICLE_COUNT) * Math.PI * 2;
-    this.orbitRadius = BASE_RING_RADIUS + (Math.random() - 0.5) * RING_THICKNESS;
-
-    // —— 视觉 ——
-    this.size = 0.6 + Math.random() * 2.8;
-    this.baseSize = this.size;
-    // 色相（0-360），每个粒子不同起始值
-    this.hue = Math.random() * 360;
-    this.hueSpeed = 0.03 + Math.random() * 0.12;  // 色相旋转速度
-    this.alpha = 0.4 + Math.random() * 0.6;
-    this.color = hslToHex(this.hue, 80, 60);
-
-    // —— 动画 ——
-    this.floatPhaseX = Math.random() * Math.PI * 2;
-    this.floatPhaseY = Math.random() * Math.PI * 2;
-    this.floatSpeedX = 0.003 + Math.random() * 0.008;
-    this.floatSpeedY = 0.003 + Math.random() * 0.008;
-
-    // —— 连线专用 ——
-    this.connections = [];           // 本帧连接的邻居
-    this.speed = 0;                 // 当前移动速度（用于动态特效）
-    this.prevX = this.x;
-    this.prevY = this.y;
-
-    // —— 脉冲相位 ——
-    this.pulsePhase = Math.random() * Math.PI * 2;
-  }
-
-  setTarget(mode, cx, cy) {
-    if (mode === 'gather') {
-      this.targetX = cx + this.orbitRadius * Math.cos(this.angle);
-      this.targetY = cy + this.orbitRadius * Math.sin(this.angle);
-      this.targetSize = this.baseSize * 1.5;
-    } else {
-      const margin = 40;
-      this.targetX = margin + Math.random() * (W - margin * 2);
-      this.targetY = margin + Math.random() * (H - margin * 2);
-      this.targetSize = this.baseSize;
-    }
-    this.targetSize = this.targetSize || this.baseSize;
-  }
-
-  update() {
-    // 记录旧位置用于计算速度
-    this.prevX = this.x;
-    this.prevY = this.y;
-
-    // —— 线性插值向目标移动 ——
-    this.x += (this.targetX - this.x) * LERP_SPEED;
-    this.y += (this.targetY - this.y) * LERP_SPEED;
-
-    // —— 鼠标排斥力（张手状态下更强） ——
-    if (mouseActive) {
-      const dx = this.x - mouseX;
-      const dy = this.y - mouseY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < MOUSE_REPEL_RADIUS && dist > 0.1) {
-        const force = (MOUSE_REPEL_RADIUS - dist) / MOUSE_REPEL_RADIUS;
-        const repelScale = lastGestureMode === 'scatter' ? 1.5 : 0.4;
-        this.x += (dx / dist) * MOUSE_REPEL_FORCE * force * repelScale;
-        this.y += (dy / dist) * MOUSE_REPEL_FORCE * force * repelScale;
-      }
-    }
-
-    // —— 漂浮微动 ——
-    this.floatPhaseX += this.floatSpeedX;
-    this.floatPhaseY += this.floatSpeedY;
-    this.x += Math.sin(this.floatPhaseX) * FLOAT_AMPLITUDE * 0.25;
-    this.y += Math.cos(this.floatPhaseY) * FLOAT_AMPLITUDE * 0.25;
-
-    // —— 色相旋转 ——
-    this.hue += this.hueSpeed;
-    const saturation = 70 + Math.sin(time * 0.02 + this.id * 0.1) * 25;
-    const lightness = 55 + Math.sin(time * 0.03 + this.id) * 20;
-    this.color = hslToHex(this.hue, saturation, lightness);
-
-    // —— 大小脉冲 ——
-    this.pulsePhase += 0.03;
-    this.pulseScale = 1 + Math.sin(this.pulsePhase) * 0.15;
-
-    // —— 计算移动速度 ——
-    this.speed = Math.sqrt(
-      (this.x - this.prevX) ** 2 + (this.y - this.prevY) ** 2
-    );
-  }
-
-  draw(ctx) {
-    const s = Math.max(0.3, this.size * this.pulseScale);
-    ctx.save();
-    ctx.globalAlpha = this.alpha;
-
-    // 最外层光晕（仅在粒子较大时绘制以节省性能）
-    if (s > 1.5) {
-      const glow3 = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, s * 6);
-      glow3.addColorStop(0, this.color);
-      glow3.addColorStop(1, 'transparent');
-      ctx.fillStyle = glow3;
-      ctx.beginPath(); ctx.arc(this.x, this.y, s * 6, 0, Math.PI * 2); ctx.fill();
-    }
-
-    // 中层光晕
-    const glow2 = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, s * 3);
-    glow2.addColorStop(0, this.color);
-    glow2.addColorStop(1, 'transparent');
-    ctx.fillStyle = glow2;
-    ctx.beginPath(); ctx.arc(this.x, this.y, s * 3, 0, Math.PI * 2); ctx.fill();
-
-    // 内核（白亮）
-    const core = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, s);
-    core.addColorStop(0, '#ffffff');
-    core.addColorStop(0.35, this.color);
-    core.addColorStop(1, 'transparent');
-    ctx.fillStyle = core;
-    ctx.beginPath(); ctx.arc(this.x, this.y, s, 0, Math.PI * 2); ctx.fill();
-
-    ctx.restore();
-  }
-}
-
-// ========================== 背景星星 ==============================
-class BackgroundStar {
-  constructor() {
-    this.x = Math.random() * window.innerWidth;
-    this.y = Math.random() * window.innerHeight;
-    this.size = 0.3 + Math.random() * 0.8;
-    this.alpha = 0.2 + Math.random() * 0.5;
-    this.twinkleSpeed = 0.01 + Math.random() * 0.04;
-    this.twinklePhase = Math.random() * Math.PI * 2;
-  }
-
-  update() {
-    this.twinklePhase += this.twinkleSpeed;
-    this.currentAlpha = this.alpha * (0.5 + 0.5 * Math.sin(this.twinklePhase));
-  }
-
-  draw(ctx) {
-    ctx.save();
-    ctx.globalAlpha = this.currentAlpha;
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-}
-
-// ========================== 辅助函数 ============================
-
-function dist(a, b) {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-// ========================== 手势识别 ============================
+// ========================== 手势识别 (MediaPipe) ===============
 
 function isFingerExtended(tipIdx, mcpIdx, landmarks, wrist) {
-  const tipDist = dist(landmarks[tipIdx], wrist);
-  const mcpDist = dist(landmarks[mcpIdx], wrist);
+  const tipDist = Math.hypot(landmarks[tipIdx].x - wrist.x, landmarks[tipIdx].y - wrist.y);
+  const mcpDist = Math.hypot(landmarks[mcpIdx].x - wrist.x, landmarks[mcpIdx].y - wrist.y);
   return tipDist > mcpDist * 1.12;
 }
 
@@ -362,155 +401,16 @@ function detectGesture(landmarks) {
     { tip: 16, mcp: 13 },
     { tip: 20, mcp: 17 },
   ];
-  let extendedCount = 0;
+  let ext = 0;
   for (const f of fingers) {
-    if (isFingerExtended(f.tip, f.mcp, landmarks, wrist)) extendedCount++;
+    if (isFingerExtended(f.tip, f.mcp, landmarks, wrist)) ext++;
   }
-  if (extendedCount >= 3) return 'open';
-  if (extendedCount <= 1) return 'fist';
+  if (ext >= 3) return 'open';
+  if (ext <= 1) return 'fist';
   return 'none';
 }
 
-// ========================== 粒子系统初始化 ========================
-
-function initParticles() {
-  particles = [];
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
-    particles.push(new Particle(i));
-  }
-}
-
-function initBgStars() {
-  bgStars = [];
-  for (let i = 0; i < BG_STAR_COUNT; i++) {
-    bgStars.push(new BackgroundStar());
-  }
-}
-
-function setAllParticleTargets(mode) {
-  const cx = W / 2;
-  const cy = H / 2;
-  for (const p of particles) {
-    p.setTarget(mode, cx, cy);
-  }
-}
-
-// ========================== 渲染循环 ============================
-
-function drawConnections() {
-  // 构建空间哈希表
-  clearSpatialGrid();
-  for (const p of particles) {
-    addToGrid(p);
-  }
-
-  // 为每个粒子找邻居并连线
-  for (const p of particles) {
-    p.connections = [];
-    const nearby = getNearby(p);
-
-    // 按距离排序，取最近的几个
-    const candidates = [];
-    for (const other of nearby) {
-      if (other === p) continue;
-      const d = dist(p, other);
-      if (d < CONNECT_MAX_DIST) {
-        candidates.push({ particle: other, dist: d });
-      }
-    }
-    candidates.sort((a, b) => a.dist - b.dist);
-    p.connections = candidates.slice(0, CONNECT_MAX_LINES);
-  }
-
-  // 绘制连线（去重：只画 id 较小的到较大的）
-  const drawn = new Set();
-  ctx.save();
-  for (const p of particles) {
-    for (const conn of p.connections) {
-      const other = conn.particle;
-      const key = Math.min(p.id, other.id) + '_' + Math.max(p.id, other.id);
-      if (drawn.has(key)) continue;
-      drawn.add(key);
-
-      // 距离越近线越亮
-      const alpha = Math.max(0, 1 - conn.dist / CONNECT_MAX_DIST) * 0.35;
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = p.color;
-      ctx.lineWidth = 0.5;
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(other.x, other.y);
-      ctx.stroke();
-    }
-  }
-  ctx.restore();
-}
-
-function drawCenterRing() {
-  const cx = W / 2, cy = H / 2;
-  const pulse = Math.sin(time * 0.03) * 0.3 + 0.7; // 光环呼吸
-
-  ctx.save();
-
-  // 外层旋转光环
-  const rotation = time * 0.005;
-  ctx.globalAlpha = 0.12 * pulse;
-  ctx.strokeStyle = '#00f0ff';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(cx, cy, BASE_RING_RADIUS + 20, rotation, rotation + Math.PI * 1.6);
-  ctx.stroke();
-
-  // 内层虚线环
-  ctx.globalAlpha = 0.08 * pulse;
-  ctx.setLineDash([8, 20]);
-  ctx.lineDashOffset = time * 0.5;
-  ctx.beginPath();
-  ctx.arc(cx, cy, BASE_RING_RADIUS, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // 中心微光
-  const centerGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 40);
-  centerGlow.addColorStop(0, 'rgba(255,255,255,0.06)');
-  centerGlow.addColorStop(1, 'transparent');
-  ctx.fillStyle = centerGlow;
-  ctx.beginPath(); ctx.arc(cx, cy, 40, 0, Math.PI * 2); ctx.fill();
-
-  ctx.restore();
-}
-
-function drawParticles() {
-  // 背景覆盖（较低的 alpha 产生更长拖尾）
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
-  ctx.fillRect(0, 0, W, H);
-
-  // 先画背景星星
-  for (const star of bgStars) {
-    star.update();
-    star.draw(ctx);
-  }
-
-  // 连线（在粒子之前画，让粒子覆盖在线上）
-  drawConnections();
-
-  // 中心光环
-  drawCenterRing();
-
-  // 画粒子
-  for (const p of particles) {
-    p.update();
-    p.draw(ctx);
-  }
-}
-
-function animate() {
-  time++;
-  drawParticles();
-  requestAnimationFrame(animate);
-}
-
-// ========================== 摄像头 & MediaPipe =====================
+// ========================== 摄像头 & MediaPipe ==================
 
 async function setupCamera() {
   video = document.getElementById('cameraPreview');
@@ -519,7 +419,7 @@ async function setupCamera() {
     audio: false,
   });
   video.srcObject = stream;
-  await new Promise(resolve => { video.onloadedmetadata = resolve; });
+  await new Promise(r => { video.onloadedmetadata = r; });
   video.play();
 }
 
@@ -534,11 +434,13 @@ async function setupMediaPipe() {
       delegate: "GPU",
     },
     runningMode: "VIDEO",
-    numHands: 1,
+    numHands: 2, // 检测双手
   });
   isModelLoaded = true;
   document.getElementById('loadingOverlay').style.opacity = '0';
 }
+
+// ========================== 手势检测循环 =======================
 
 function detectFrame() {
   if (!isModelLoaded || !video || video.readyState < 2) {
@@ -551,100 +453,109 @@ function detectFrame() {
     const results = handLandmarker.detectForVideo(video, performance.now());
 
     if (results.landmarks && results.landmarks.length > 0) {
-      const landmarks = results.landmarks[0];
-      const gesture = detectGesture(landmarks);
+      const hand0 = results.landmarks[0];
+      const gesture = detectGesture(hand0);
 
+      // —— 1. 手势类型（张手/握拳） ——
       if (gesture === 'open' || gesture === 'fist') {
         gestureStable++;
         if (gestureStable >= 3) {
-          updateGestureState(gesture);
+          applyGestureMode(gesture);
           gestureStable = 3;
         }
       } else {
         gestureStable = Math.max(0, gestureStable - 1);
       }
-    } else {
-      gestureStable = Math.max(0, gestureStable - 1);
-      if (gestureStable === 0 && lastGestureMode !== 'scatter') {
-        updateGestureState('none');
+
+      // —— 2. 手掌左右移动 → 旋转 ——
+      // 手在画面左侧→左旋，右侧→右旋。取手腕 x 坐标
+      const handX = hand0[0].x; // 0=左, 1=右
+      // 映射到旋转角度 [-0.8, 0.8] 弧度
+      targetRotationY = (handX - 0.5) * 1.6;
+      prevHandX = handX;
+
+      // —— 3. 双手推拉 → 缩放 ——
+      if (results.landmarks.length >= 2) {
+        const hand1 = results.landmarks[1];
+        const h0x = hand0[0].x, h0y = hand0[0].y;
+        const h1x = hand1[0].x, h1y = hand1[0].y;
+        const dist = Math.hypot(h1x - h0x, h1y - h0y);
+
+        // 基线：首次检测到双手时记录
+        if (twoHandBaseDist === null) twoHandBaseDist = dist;
+
+        // 相对变化映射到缩放 [0.4, 2.5]
+        const ratio = dist / (twoHandBaseDist || 0.3);
+        targetScale = Math.max(0.4, Math.min(2.5, ratio));
+      } else {
+        // 单手时慢慢回 1.0
+        twoHandBaseDist = null;
+        targetScale += (1.0 - targetScale) * 0.02;
       }
+    } else {
+      // —— 无手 → 回到心形 ——
+      gestureStable = Math.max(0, gestureStable - 1);
+      if (gestureStable === 0 && lastGestureMode !== 'heart') {
+        applyGestureMode('heart');
+      }
+      twoHandBaseDist = null;
+      targetRotationY += (0 - targetRotationY) * 0.02;
+      targetScale += (1.0 - targetScale) * 0.02;
     }
   }
 
   requestAnimationFrame(detectFrame);
 }
 
-function updateGestureState(gesture) {
-  if (gesture === 'open' && lastGestureMode !== 'scatter') {
-    lastGestureMode = 'scatter';
-    setAllParticleTargets('scatter');
-  } else if (gesture === 'fist' && lastGestureMode !== 'gather') {
-    lastGestureMode = 'gather';
-    setAllParticleTargets('gather');
-  } else if (gesture === 'none' && lastGestureMode !== 'scatter') {
-    lastGestureMode = 'scatter';
-    setAllParticleTargets('scatter');
+/**
+ * 切换手势模式并生成新的目标位置
+ */
+function applyGestureMode(gesture) {
+  let mode;
+  if (gesture === 'open')  mode = 'scatter';
+  else if (gesture === 'fist') mode = 'gather';
+  else                     mode = 'heart';
+
+  if (mode !== lastGestureMode) {
+    lastGestureMode = mode;
+    setAllTargets(mode);
   }
 }
 
-// ========================== 鼠标事件 ==============================
-
-function onMouseMove(e) {
-  mouseX = e.clientX;
-  mouseY = e.clientY;
-  mouseActive = true;
-}
-
-function onMouseLeave() {
-  mouseActive = false;
-}
-
-// ========================== 响应式处理 ============================
+// ========================== 响应式 ==============================
 
 function onResize() {
-  W = window.innerWidth;
-  H = window.innerHeight;
-  canvas.width = W;
-  canvas.height = H;
-  if (lastGestureMode === 'scatter') {
-    setAllParticleTargets('scatter');
-  } else {
-    setAllParticleTargets('gather');
-  }
+  const W = window.innerWidth, H = window.innerHeight;
+  camera.aspect = W / H;
+  camera.updateProjectionMatrix();
+  renderer.setSize(W, H);
 }
 
-// ========================== 启动入口 ============================
+// ========================== 启动 ================================
 
 async function main() {
-  // 1. Canvas
-  canvas = document.getElementById('particleCanvas');
-  ctx = canvas.getContext('2d');
-  W = window.innerWidth; H = window.innerHeight;
-  canvas.width = W; canvas.height = H;
+  // 1. Three.js
+  setupThreeJS();
 
-  // 2. 粒子 & 背景星星
-  initParticles();
-  initBgStars();
-  setAllParticleTargets('scatter');
+  // 2. 初始目标：心形
+  setAllTargets('heart');
 
   // 3. 渲染循环
   animate();
 
-  // 4. 事件监听
+  // 4. 事件
   window.addEventListener('resize', onResize);
-  window.addEventListener('mousemove', onMouseMove);
-  window.addEventListener('mouseleave', onMouseLeave);
 
   // 5. 摄像头
-  try { await setupCamera(); } catch (err) {
-    console.warn('摄像头不可用：', err.message);
-    document.getElementById('loadingOverlay').textContent = '⚠ 需要摄像头权限，请刷新并允许';
+  try { await setupCamera(); } catch (e) {
+    console.warn('摄像头不可用：', e.message);
+    document.getElementById('loadingOverlay').textContent = '⚠ 需要摄像头权限';
   }
 
   // 6. MediaPipe
-  try { await setupMediaPipe(); detectFrame(); } catch (err) {
-    console.error('MediaPipe 加载失败：', err);
-    document.getElementById('loadingOverlay').textContent = '❌ 模型加载失败，请检查网络后刷新';
+  try { await setupMediaPipe(); detectFrame(); } catch (e) {
+    console.error('MediaPipe 加载失败：', e);
+    document.getElementById('loadingOverlay').textContent = '❌ 模型加载失败，请检查网络';
   }
 }
 

@@ -143,14 +143,25 @@
 <!-- 加载 -->
 <div id="load">◈ 加载模型…</div>
 
+<!-- CDN 加载超时检测 -->
+<script>
+setTimeout(function(){
+  var el=document.getElementById('load');
+  if(el&&el.style.opacity!=='0'){
+    el.textContent='❌ CDN 加载超时，请检查网络后刷新';
+    el.style.color='#f66';
+  }
+},15000);
+</script>
+
 <script type="importmap">
-{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+{ "imports": { "three": "https://esm.sh/three@0.160.0" } }
 </script>
 
 <script type="module">
 import * as THREE from 'three';
 import { HandLandmarker, FilesetResolver } from
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/+esm";
+  "https://esm.sh/@mediapipe/tasks-vision@0.10.18";
 
 // ===================== 常量 =====================
 const MAX_P = 3000;          // 预分配最大粒子数
@@ -480,7 +491,7 @@ async function setupCam() {
 }
 async function setupMP() {
   const v = await FilesetResolver.forVisionTasks(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm");
+    "https://esm.sh/@mediapipe/tasks-vision@0.10.18/wasm");
   handLandmarker = await HandLandmarker.createFromOptions(v, {
     baseOptions: {
       modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",

@@ -400,13 +400,14 @@ function setupThree() {
     },
     vertexShader: /* glsl */ `
       attribute float size;
+      attribute vec3 aColor;
       varying vec3 vColor;
       varying float vDepth;
       void main() {
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         gl_PointSize = size * (320.0 / -mv.z);
         gl_Position = projectionMatrix * mv;
-        vColor = color;
+        vColor = aColor;
         vDepth = -mv.z;
       }
     `,

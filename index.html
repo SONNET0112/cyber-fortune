@@ -137,8 +137,10 @@ const ROT_LERP = 0.05;       // 旋转插值
 const SCALE_LERP = 0.06;     // 缩放插值
 
 // ===================== 全局 =====================
-let scene, camera, renderer, bgParticles, mainParticles;
-let geo, posCur, posTgt, colArr, sizeArr;
+let scene, camera, renderer, orthoCam, bgParticles, mainParticles;
+let rtTrail;                   // 拖尾渲染目标
+let fadeQuad, displayQuad;     // 拖尾用全屏四边形
+let geo, posCur, posTgt, colArr, sizeArr, ageArr;
 let W, H, time = 0;
 let currentShape = 'nebula';
 let particleCount = 1500;
@@ -146,7 +148,7 @@ let baseColor = new THREE.Color('#60a0ff');
 let targetScale = 1.2, currentScale = 1.2;
 let targetRotY = 0, targetRotX = 0;
 let currentRotY = 0, currentRotX = 0;
-let targetShiftY = 0; // 手上下 → 粒子垂直位移
+let targetShiftY = 0;
 
 // 手势
 let video, handLandmarker, loaded = false, lastVidTime = -1;
@@ -333,34 +335,87 @@ function setupThree() {
   }));
   scene.add(bgParticles);
 
-  // —— 主体粒子 ——
+  // —— 拖尾渲染目标 ——
+  orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  rtTrail = new THREE.WebGLRenderTarget(W, H, {
+    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat
+  });
+  // 暗化四边形（每帧让上一帧画面变暗，产生拖尾残影）
+  const fadeMat = new THREE.MeshBasicMaterial({
+    color: 0x000000, transparent: true, opacity: 0.07,
+    depthTest: false, depthWrite: false,
+  });
+  fadeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fadeMat);
+  const fadeScene = new THREE.Scene(); fadeScene.add(fadeQuad);
+  window._fadeScene = fadeScene;
+  // 显示四边形（将拖尾RT拷贝到屏幕）
+  const dispMat = new THREE.ShaderMaterial({
+    uniforms: { tDiffuse: { value: rtTrail.texture } },
+    vertexShader: 'varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position,1.0);}',
+    fragmentShader: 'varying vec2 vUv;uniform sampler2D tDiffuse;void main(){gl_FragColor=texture(tDiffuse,vUv);}',
+    depthTest: false, depthWrite: false,
+  });
+  displayQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), dispMat);
+  const dispScene = new THREE.Scene(); dispScene.add(displayQuad);
+  window._dispScene = dispScene;
+
+  // —— 主体粒子（ShaderMaterial：每粒子尺寸 + 生命周期） ——
   const mainTex = makeGlowTexture(255, 255, 255);
   geo = new THREE.BufferGeometry();
   posCur  = new Float32Array(MAX_P * 3);
   posTgt  = new Float32Array(MAX_P * 3);
   colArr  = new Float32Array(MAX_P * 3);
   sizeArr = new Float32Array(MAX_P);
+  ageArr  = new Float32Array(MAX_P);
 
-  // 初始化目标
   fillTargets(currentShape, particleCount, posTgt);
-  // 当前位置 + 每粒子大小
   for (let i = 0; i < MAX_P; i++) {
     const i3 = i * 3;
     posCur[i3]   = (Math.random() - 0.5) * 10;
     posCur[i3+1] = (Math.random() - 0.5) * 8;
     posCur[i3+2] = (Math.random() - 0.5) * 10;
-    sizeArr[i]   = 0.5 + Math.random() * 1.5;
+    sizeArr[i]   = 0.6 + Math.random() * 1.4;
+    ageArr[i]    = Math.random(); // 0→1 生命周期
   }
   geo.setAttribute('position', new THREE.BufferAttribute(posCur, 3));
   geo.setAttribute('color',    new THREE.BufferAttribute(colArr, 3));
+  geo.setAttribute('size',     new THREE.BufferAttribute(sizeArr, 1));
+  geo.setAttribute('age',      new THREE.BufferAttribute(ageArr, 1));
   geo.setDrawRange(0, particleCount);
   updateAllColors(0);
 
-  mainParticles = new THREE.Points(geo, new THREE.PointsMaterial({
-    size: 0.28, map: mainTex, blending: THREE.AdditiveBlending,
-    depthWrite: false, transparent: true, vertexColors: true,
-    sizeAttenuation: true, opacity: 0.92,
-  }));
+  const particleMat = new THREE.ShaderMaterial({
+    uniforms: { uTex: { value: mainTex } },
+    vertexShader: `
+      attribute float size;
+      attribute float age;
+      varying vec3 vCol;
+      varying float vAge;
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = size * age * (320.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+        vCol = color;
+        vAge = age;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vCol;
+      varying float vAge;
+      uniform sampler2D uTex;
+      void main() {
+        vec4 t = texture(uTex, gl_PointCoord);
+        float glow = t.r * 0.5 + t.a;
+        float alpha = glow * (0.25 + 0.75 * vAge);
+        vec3 col = vCol * (1.3 + t.r * 0.6);
+        if (alpha < 0.01) discard;
+        gl_FragColor = vec4(col, alpha);
+      }
+    `,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false, depthTest: true, transparent: true,
+  });
+  mainParticles = new THREE.Points(geo, particleMat);
   scene.add(mainParticles);
 }
 
@@ -409,14 +464,29 @@ function animate() {
     targetShiftY += (0 - targetShiftY) * 0.02;
   }
 
-  // 更新粒子位置（Lerp）
+  // 更新粒子位置（Lerp + 重力 + 生命周期）
+  const grav = 0.0008; // 微重力
   for (let i = 0; i < particleCount; i++) {
     const i3 = i * 3;
-    posCur[i3]   += (posTgt[i3]   - posCur[i3])   * LERP;
+    // —— Lerp 向目标 ——
+    posCur[i3]   += (posTgt[i3]   - posCur[i3]) * LERP;
     posCur[i3+1] += (posTgt[i3+1] - posCur[i3+1]) * LERP;
     posCur[i3+2] += (posTgt[i3+2] - posCur[i3+2]) * LERP;
+    // —— 微重力 ——
+    posCur[i3+1] -= grav;
+
+    // —— 生命周期：衰减，0时重生 ——
+    ageArr[i] -= 0.0015;
+    if (ageArr[i] <= 0) {
+      ageArr[i] = 1.0;
+      // 重生时重置到目标附近（模拟新生粒子从当前位置出现）
+      posCur[i3]   = posTgt[i3]   + (Math.random()-0.5) * 2;
+      posCur[i3+1] = posTgt[i3+1] + (Math.random()-0.5) * 2;
+      posCur[i3+2] = posTgt[i3+2] + (Math.random()-0.5) * 2;
+    }
   }
   geo.attributes.position.needsUpdate = true;
+  geo.attributes.age.needsUpdate = true;
 
   // 根据旋转角更新色相
   updateAllColors(currentRotY);
@@ -425,14 +495,22 @@ function animate() {
   mainParticles.scale.setScalar(currentScale);
   mainParticles.rotation.y = currentRotY;
   mainParticles.rotation.x = currentRotX * 0.7;
-  // 手上下 → 粒子整体上下偏移
   mainParticles.position.y += (targetShiftY - mainParticles.position.y) * 0.05;
 
   // 背景粒子缓慢自转
   bgParticles.rotation.y += 0.0004;
   bgParticles.rotation.x += 0.0002;
 
-  renderer.render(scene, camera);
+  // ———— 拖尾渲染管线 ————
+  // 暗化度随粒子速度调整（模拟动态拖尾长度）
+  fadeQuad.material.opacity = 0.07;
+  renderer.setRenderTarget(rtTrail);
+  renderer.autoClear = false;
+  renderer.render(window._fadeScene, orthoCam);  // 暗化上一帧
+  renderer.render(scene, camera);                 // 叠加新粒子
+  renderer.setRenderTarget(null);
+  renderer.autoClear = true;
+  renderer.render(window._dispScene, orthoCam);   // 输出到屏幕
 }
 
 // ===================== 手势识别 =====================
@@ -568,7 +646,7 @@ window.addEventListener('mouseup', () => { resizing = false; });
 window.addEventListener('resize', () => {
   W = window.innerWidth; H = window.innerHeight;
   camera.aspect = W / H; camera.updateProjectionMatrix();
-  renderer.setSize(W, H);
+  renderer.setSize(W, H); rtTrail.setSize(W, H);
 });
 
 // ===================== 启动 =====================

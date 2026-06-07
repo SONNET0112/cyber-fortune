@@ -81,22 +81,6 @@
     color: rgba(255,255,255,0.2); font-size: 3em;
     transition: all 0.8s;
   }
-  /* 模式切换通知 */
-  #modeNotice {
-    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
-    z-index: 15; pointer-events: none;
-    font-size: 1.8em; font-weight: 900; letter-spacing: 0.15em;
-    color: #fff; text-shadow: 0 0 30px rgba(150,200,255,0.9);
-    opacity: 0; transition: opacity 0.2s;
-  }
-  /* 手指数量指示器 */
-  #fingerCount {
-    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-    z-index: 10; pointer-events: none;
-    font-size: 1em; color: rgba(200,220,255,0.7);
-    letter-spacing: 0.1em; transition: all 0.3s;
-  }
-
   /* ===== 加载 ===== */
   #load {
     position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
@@ -114,7 +98,7 @@
 
 <!-- 控制面板 -->
 <div id="panel">
-  <h4 id="modeLabel">🌌 星云</h4>
+  <h4>🌌 星云</h4>
   <label>🎨 基础色</label>
   <input type="color" id="colorPicker" value="#60a0ff">
   <label>🔹 粒子密度 <span id="densityVal" style="float:right">1500</span></label>
@@ -132,12 +116,6 @@
 
 <!-- 中心手势图标 -->
 <div id="hint"></div>
-
-<!-- 模式切换通知 -->
-<div id="modeNotice"></div>
-
-<!-- 手指数量显示 -->
-<div id="fingerCount"></div>
 
 <!-- 加载 -->
 <div id="load">◈ 加载模型…</div>
@@ -181,20 +159,6 @@ const colorPicker = document.getElementById('colorPicker');
 const densitySlider = document.getElementById('densitySlider');
 const densityVal = document.getElementById('densityVal');
 const hintEl = document.getElementById('hint');
-const modeNotice = document.getElementById('modeNotice');
-const fingerCountEl = document.getElementById('fingerCount');
-const modeLabel = document.getElementById('modeLabel');
-
-// 形状列表：手指数量 → 模式
-const SHAPE_LIST = ['galaxy', 'nebula', 'firework', 'saturn', 'flower', 'vortex'];
-const SHAPE_NAMES = ['💫 银河', '🌌 星云', '🎆 烟花', '🪐 土星', '🌸 花朵', '🌪 旋涡'];
-
-// 手指计数防抖
-let fingerCount = -1;          // 当前检测到的手指数
-let fingerStable = 0;          // 同一数字持续帧数
-const FINGER_DEBOUNCE = 40;    // 需稳定 40 帧（约1.3秒）才切换
-let fingerLocked = false;     // 切换后短暂锁定，防止反复触发
-let lockTimer = 0;
 const camBox = document.getElementById('camBox');
 const resizeHandle = document.getElementById('resizeHandle');
 const fsBtn = document.getElementById('fsBtn');
@@ -471,49 +435,7 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-// ===================== 形状切换 =====================
-function switchShape(shape, idx) {
-  if (currentShape === shape) return;
-  currentShape = shape;
-  fillTargets(shape, particleCount, posTgt);
-  // 更新面板标签
-  modeLabel.textContent = SHAPE_NAMES[idx !== undefined ? idx : SHAPE_LIST.indexOf(shape)];
-  // 显示模式通知
-  showModeNotice(idx !== undefined ? idx : SHAPE_LIST.indexOf(shape));
-  // 切换后锁定 60 帧，防止立即反向切换
-  fingerLocked = true; lockTimer = 60;
-}
-
-function showModeNotice(idx) {
-  modeNotice.textContent = 'MODE ' + idx;
-  modeNotice.style.opacity = '1';
-  // 1.2 秒后淡出
-  clearTimeout(window._noticeTimeout);
-  window._noticeTimeout = setTimeout(() => { modeNotice.style.opacity = '0'; }, 1200);
-}
-
 // ===================== 手势识别 =====================
-
-/** 数手指：0=握拳, 1-5=对应手指数量 */
-function countFingers(lm) {
-  const wrist = lm[0];
-  let count = 0;
-
-  // 食指(8)/中指(12)/无名指(16)/小指(20)：比较指尖与 MCP 到手腕距离
-  const fingers = [[8,5],[12,9],[16,13],[20,17]];
-  for (const [tip, mcp] of fingers) {
-    const td = Math.hypot(lm[tip].x - wrist.x, lm[tip].y - wrist.y);
-    const md = Math.hypot(lm[mcp].x - wrist.x, lm[mcp].y - wrist.y);
-    if (td > md * 1.2) count++;
-  }
-
-  // 大拇指(4)：检查拇指尖与食指 MCP(5) 的距离
-  const thumbTip = lm[4], idxMcp = lm[5];
-  const thumbDist = Math.hypot(thumbTip.x - idxMcp.x, thumbTip.y - idxMcp.y);
-  if (thumbDist > 0.08) count++;
-
-  return count;
-}
 
 function calcOpenness(lm) {
   const wrist = lm[0];
@@ -576,31 +498,8 @@ function detectFrame() {
       handX = lm[9].x;
       handY = lm[9].y;
       hintEl.style.opacity = '0';
-
-      // —— 手指计数 + 防抖切换模型 ——
-      const cnt = countFingers(lm);
-      if (cnt === fingerCount) {
-        fingerStable++;
-        // 稳定达到阈值且未锁定 → 切换
-        if (fingerStable >= FINGER_DEBOUNCE && !fingerLocked) {
-          const shape = SHAPE_LIST[cnt];
-          if (shape && shape !== currentShape) {
-            switchShape(shape, cnt);
-          }
-        }
-      } else {
-        fingerCount = cnt; fingerStable = 0;
-      }
-      // 锁定倒计时
-      if (fingerLocked) { lockTimer--; if (lockTimer <= 0) fingerLocked = false; }
-
-      // 显示检测到的手指数量
-      fingerCountEl.textContent = '✋ ' + cnt + ' 指';
     } else {
       handDetected = false;
-      fingerCount = -1; fingerStable = 0;
-      fingerLocked = false; lockTimer = 0;
-      fingerCountEl.textContent = '';
       // 无手时缓慢归位
       openness += (0.5 - openness) * 0.02;
       handX += (0.5 - handX) * 0.02;
